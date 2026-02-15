@@ -45,7 +45,7 @@ $script = Join-Path $projectRoot "tools\e2e_runner.py"
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
 $reportFile = Join-Path $resolvedReportDir "e2e_report_${stamp}.json"
 
-$args = @(
+$pythonArgs = @(
   $script
   "--mode", $Mode
   "--cycles", $Cycles.ToString()
@@ -55,24 +55,24 @@ $args = @(
 )
 
 if ($Model -ne "") {
-  $args += @("--model", $Model)
+  $pythonArgs += @("--model", $Model)
 }
 
 if ($Visual) {
-  $args += "--visual"
+  $pythonArgs += "--visual"
 }
 
 if ($SaveFrames -ne "") {
   $resolvedFrames = if ([System.IO.Path]::IsPathRooted($SaveFrames)) { $SaveFrames } else { Join-Path $projectRoot $SaveFrames }
-  $args += @("--save-frames", $resolvedFrames)
+  $pythonArgs += @("--save-frames", $resolvedFrames)
 }
 
 if ($Json) {
-  $args += "--json"
+  $pythonArgs += "--json"
 }
 
 Write-Host "[E2E-RUNNER] mode=$Mode cycles=$Cycles scenario=$Scenario"
-& $python @args
+& $python @pythonArgs
 
 if ($LASTEXITCODE -ne 0) {
   throw "[E2E-RUNNER] FAIL (exit=$LASTEXITCODE)"

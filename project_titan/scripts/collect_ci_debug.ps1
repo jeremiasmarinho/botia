@@ -1,7 +1,7 @@
 param(
   [string]$ReportDir = "reports",
   [string]$OutputDir = "reports",
-  [switch]$IncludeReports = $true,
+  [switch]$ExcludeReports,
   [int]$MaxReportFiles = 30
 )
 
@@ -93,7 +93,7 @@ Copy-IfExists -SourcePath (Join-Path $projectRoot "..\.github\PULL_REQUEST_TEMPL
 Copy-IfExists -SourcePath (Join-Path $projectRoot "..\.github\CODEOWNERS") -TargetDir (Join-Path $stagingDir ".github")
 Copy-IfExists -SourcePath (Join-Path $projectRoot "..\CONTRIBUTING.md") -TargetDir $stagingDir
 
-if ($IncludeReports) {
+if (-not $ExcludeReports) {
   Copy-RecentReportFiles -SourceDir $resolvedReportDir -TargetDir (Join-Path $stagingDir "project_titan\reports") -Limit $MaxReportFiles
 }
 

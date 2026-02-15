@@ -39,7 +39,7 @@ else {
 
 New-Item -ItemType Directory -Path $resolvedReportDir -Force | Out-Null
 
-$args = @(
+$pythonArgs = @(
   (Join-Path $PSScriptRoot "vision_profile.py"),
   "--frames", "$Frames",
   "--target-fps", "$TargetFps",
@@ -48,16 +48,16 @@ $args = @(
 )
 
 if ($Json) {
-  $args += "--json"
+  $pythonArgs += "--json"
 }
 if ($NoSamples) {
-  $args += "--no-samples"
+  $pythonArgs += "--no-samples"
 }
 
 Write-Host "[VISION-PROFILE] python=$pythonExe"
 Write-Host "[VISION-PROFILE] frames=$Frames target_fps=$TargetFps warmup=$WarmupFrames"
 
-& $pythonExe @args
+& $pythonExe @pythonArgs
 if ($LASTEXITCODE -ne 0) {
   throw "vision_profile falhou (exit=$LASTEXITCODE)"
 }

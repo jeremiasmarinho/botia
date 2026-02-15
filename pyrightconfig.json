@@ -1,0 +1,7 @@
+{
+  "extraPaths": ["project_titan"],
+  "pythonVersion": "3.10",
+  "venvPath": ".venv",
+  "reportMissingImports": "warning",
+  "reportOptionalMemberAccess": "information"
+}

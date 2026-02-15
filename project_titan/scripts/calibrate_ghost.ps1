@@ -3,7 +3,7 @@ param(
   [ValidateSet("manual", "show", "validate", "env")]
   [string]$Mode,
 
-  [string]$Profile = "default",
+  [string]$ProfileName = "default",
   [string]$Fold,
   [string]$Call,
   [string]$RaiseSmall,
@@ -28,7 +28,7 @@ if (-not (Test-Path $script)) {
   throw "Script nao encontrado: $script"
 }
 
-$cmdArgs = @($script, $Mode, "--profile", $Profile)
+$cmdArgs = @($script, $Mode, "--profile", $ProfileName)
 
 switch ($Mode) {
   "manual" {
