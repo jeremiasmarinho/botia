@@ -13,3 +13,5 @@ mobile/.buildozer/
 mobile/bin/
 mobile/.gradle/
 mobile/.python-for-android/
+
+reports/*.json
