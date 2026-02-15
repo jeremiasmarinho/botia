@@ -80,6 +80,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TickSeconds 0.1`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -OpenLastReport`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -PrintLastReport`
 
 Também é possível forçar um cenário específico:
 
@@ -101,6 +102,8 @@ Campos atuais: `ticks`, `outcomes`, `average_win_rate`, `action_counts`, `durati
 Para persistir em arquivo `.json`, informe `-ReportDir` no script Windows (ou defina `TITAN_REPORT_DIR`).
 
 Para abrir automaticamente o último relatório gerado ao final da execução, use `-OpenLastReport`.
+
+Para imprimir o último relatório JSON no terminal ao final da execução, use `-PrintLastReport`.
 
 ## APK Android (PoC)
 

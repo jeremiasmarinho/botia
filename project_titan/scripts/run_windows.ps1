@@ -7,7 +7,8 @@ param(
   [ValidateRange(0.05, 10.0)]
   [double]$TickSeconds = 0.2,
   [string]$ReportDir = "",
-  [switch]$OpenLastReport
+  [switch]$OpenLastReport,
+  [switch]$PrintLastReport
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,7 +67,7 @@ try {
       $resolvedReportDir = Join-Path $projectRoot $ReportDir
     }
   }
-  elseif ($OpenLastReport -and -not $HealthOnly) {
+  elseif (($OpenLastReport -or $PrintLastReport) -and -not $HealthOnly) {
     $resolvedReportDir = Join-Path $projectRoot "reports"
   }
 
@@ -94,18 +95,26 @@ try {
     throw "Engine finalizou com código $LASTEXITCODE"
   }
 
-  if ($OpenLastReport -and $null -ne $resolvedReportDir) {
+  if (($OpenLastReport -or $PrintLastReport) -and $null -ne $resolvedReportDir) {
     $latestReport = Get-ChildItem -Path $resolvedReportDir -Filter run_report_*.json -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
     if ($null -ne $latestReport) {
-      try {
-        Start-Process -FilePath $latestReport.FullName | Out-Null
-        Write-Host "[RUN] Opened latest report: $($latestReport.FullName)"
+      if ($PrintLastReport) {
+        Write-Host "[RUN] Latest report file: $($latestReport.FullName)"
+        Write-Host "[RUN] Latest report JSON:"
+        Get-Content -Path $latestReport.FullName -Raw
       }
-      catch {
-        Write-Warning "Não foi possível abrir o relatório automaticamente: $($latestReport.FullName)"
+
+      if ($OpenLastReport) {
+        try {
+          Start-Process -FilePath $latestReport.FullName | Out-Null
+          Write-Host "[RUN] Opened latest report: $($latestReport.FullName)"
+        }
+        catch {
+          Write-Warning "Não foi possível abrir o relatório automaticamente: $($latestReport.FullName)"
+        }
       }
     }
     else {
