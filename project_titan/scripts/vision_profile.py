@@ -1,3 +1,14 @@
+"""Vision profiling CLI — measure YOLO inference latency and throughput.
+
+Captures N frames via :class:`VisionTool`, records per-frame latency,
+and produces a JSON summary with FPS, percentiles and optional
+historical comparison.
+
+Usage::
+
+    python scripts/vision_profile.py --frames 100 --fps 30
+"""
+
 from __future__ import annotations
 
 import argparse

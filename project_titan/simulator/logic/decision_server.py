@@ -1,3 +1,10 @@
+"""Local HTTP equity server — Monte Carlo simulation endpoint.
+
+Starts a lightweight ``ThreadingHTTPServer`` that accepts JSON POST
+requests with hero/board/dead cards and returns estimated equity
+via Monte Carlo simulation powered by the ``treys`` library.
+"""
+
 from __future__ import annotations
 
 import json

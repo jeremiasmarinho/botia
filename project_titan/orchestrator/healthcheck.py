@@ -1,9 +1,16 @@
+"""Quick health-check for the orchestrator pipeline.
+
+Bootstraps the full stack and runs a single agent step to verify
+end-to-end connectivity (vision → equity → action → memory).
+"""
+
 from __future__ import annotations
 
 from orchestrator.engine import Orchestrator
 
 
 def main() -> int:
+    """Bootstrap and run one agent step; return ``0`` on success, ``1`` on failure."""
     orchestrator = Orchestrator()
     orchestrator.bootstrap()
 

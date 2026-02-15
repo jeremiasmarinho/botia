@@ -1,3 +1,9 @@
+"""Kivy mobile PoC — offline demonstration UI.
+
+Provides a minimal Android-ready interface that simulates a decision
+without automating any third-party application.
+"""
+
 from __future__ import annotations
 
 from kivy.app import App

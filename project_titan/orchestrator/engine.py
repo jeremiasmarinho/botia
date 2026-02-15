@@ -1,3 +1,17 @@
+"""Orchestrator — composition loop that drives agents each tick.
+
+Bootstraps all tools, workflows and agents via :class:`ServiceRegistry`,
+then enters a loop that calls ``agent.step()`` on every registered agent.
+Accumulates telemetry (action counts, win rates, simulation usage, RNG
+watchdog) and writes a JSON report on exit.
+
+Environment variables
+---------------------
+``TITAN_MAX_TICKS``     Maximum loop iterations (``None`` = infinite).
+``TITAN_TICK_SECONDS``  Sleep between ticks (default ``0.2``).
+``TITAN_REPORT_DIR``    Directory for JSON run reports.
+"""
+
 from __future__ import annotations
 
 import json
@@ -22,17 +36,27 @@ _log = TitanLogger("Orchestrator")
 
 @dataclass(slots=True)
 class EngineConfig:
+    """Orchestrator loop settings.
+
+    Attributes:
+        tick_seconds: Sleep duration between ticks.
+        max_ticks:    Stop after this many ticks (``None`` = run forever).
+    """
+
     tick_seconds: float = 0.2
     max_ticks: int | None = None
 
 
 class Orchestrator:
+    """Top-level composition engine."""
+
     def __init__(self, config: EngineConfig | None = None) -> None:
         self.config = config or EngineConfig()
         self.registry = ServiceRegistry()
         self._running = False
 
     def bootstrap(self) -> None:
+        """Wire up all services (memory, tools, workflow, agent) into the registry."""
         server_config = ServerConfig()
         vision_config = VisionRuntimeConfig()
         self.registry.memory = RedisMemory(redis_url=server_config.redis_url, ttl_seconds=5)
@@ -58,6 +82,7 @@ class Orchestrator:
 
     @staticmethod
     def _parse_outcome_metrics(outcome: str) -> tuple[str | None, float | None]:
+        """Extract ``action`` and ``win_rate`` from a free-form outcome string."""
         action: str | None = None
         win_rate: float | None = None
 
@@ -79,6 +104,7 @@ class Orchestrator:
 
     @staticmethod
     def _extract_simulations_from_decision(last_decision: Any) -> tuple[int | None, bool | None]:
+        """Return ``(simulation_count, dynamic_enabled)`` from a decision dict."""
         if not isinstance(last_decision, dict):
             return None, None
 
@@ -101,6 +127,7 @@ class Orchestrator:
 
     @staticmethod
     def _write_report_file(report: dict[str, Any]) -> str | None:
+        """Persist *report* as JSON under ``TITAN_REPORT_DIR``. Return path or ``None``."""
         report_dir = os.getenv("TITAN_REPORT_DIR", "").strip()
         if not report_dir:
             return None
@@ -120,6 +147,7 @@ class Orchestrator:
             return None
 
     def run(self) -> None:
+        """Bootstrap, enter the tick loop, and write a report on exit."""
         self.bootstrap()
         self._running = True
         _log.highlight("running composition loop")
@@ -227,10 +255,12 @@ class Orchestrator:
                 _log.info(f"run_report_file={report_file}")
 
     def stop(self) -> None:
+        """Signal the tick loop to exit after the current iteration."""
         self._running = False
 
 
 def main() -> None:
+    """CLI entry-point: read env vars and start the orchestrator."""
     max_ticks_raw = os.getenv("TITAN_MAX_TICKS", "").strip()
     max_ticks = int(max_ticks_raw) if max_ticks_raw.isdigit() else None
     tick_seconds_raw = os.getenv("TITAN_TICK_SECONDS", "").strip()

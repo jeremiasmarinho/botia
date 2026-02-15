@@ -1,3 +1,14 @@
+"""RNG fairness auditing tool.
+
+Ingests showdown / all-in results and uses a z-score test to flag opponents
+whose observed outcomes deviate significantly from their expected equity.
+
+The auditor state is persisted to Redis (or in-memory) so auditing survives
+agent restarts.
+
+See :mod:`core.rng_auditor` for the statistical engine.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +20,15 @@ from core.rng_auditor import PlayerAuditStats, RngAuditor
 
 @dataclass(slots=True)
 class RngAlert:
+    """Result of a single-opponent evasion check.
+
+    Attributes:
+        opponent_id:   Normalised opponent identifier.
+        should_evade:  ``True`` when the z-score exceeds the threshold.
+        z_score:       Current z-score for the opponent.
+        sample_count:  Number of observed showdowns.
+    """
+
     opponent_id: str
     should_evade: bool
     z_score: float
@@ -16,12 +36,16 @@ class RngAlert:
 
 
 class SupportsStorage:
+    """Structural subtype for the persistence backend."""
+
     def set(self, key: str, value: Any) -> None: ...
 
     def get(self, key: str, default: Any = None) -> Any: ...
 
 
 class RngTool:
+    """High-level interface for showdown ingestion and evasion checks."""
+
     def __init__(
         self,
         super_user_zscore: float = 3.0,
@@ -91,6 +115,7 @@ class RngTool:
         return bool(value)
 
     def ingest_showdown(self, payload: dict[str, Any]) -> PlayerAuditStats | None:
+        """Record a showdown result and return updated stats for the opponent."""
         opponent_id = self._normalize_player_id(str(payload.get("opponent_id", "")))
         if not opponent_id:
             return None
@@ -102,6 +127,7 @@ class RngTool:
         return self.auditor.player_stats(opponent_id)
 
     def should_evade(self, opponent_id: str) -> RngAlert:
+        """Check whether the agent should fold against *opponent_id*."""
         normalized_id = self._normalize_player_id(opponent_id)
         stats = self.auditor.player_stats(normalized_id)
         return RngAlert(
@@ -112,9 +138,11 @@ class RngTool:
         )
 
     def flagged_opponents(self) -> list[str]:
+        """Return a sorted list of all opponent ids flagged as super-users."""
         return self.auditor.super_users()
 
     def telemetry_summary(self, top_k: int = 3) -> dict[str, Any]:
+        """Build a summary dict suitable for report / dashboard output."""
         player_stats = self.auditor.all_player_stats()
         if not player_stats:
             return {

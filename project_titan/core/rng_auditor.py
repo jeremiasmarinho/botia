@@ -1,3 +1,22 @@
+"""Statistical RNG auditor for detecting super-user opponents.
+
+Collects all-in showdown samples ``(expected_equity, actual_outcome)`` and
+computes a z-score for each opponent.  If the z-score exceeds a configurable
+threshold (default 3.0) with enough samples, the opponent is flagged.
+
+The z-score measures how many standard errors the mean residual
+``(observed - expected)`` deviates from zero.  A large positive z-score
+means the opponent wins significantly more than their equity predicts.
+
+Maintainer notes
+-----------------
+* The auditor is **append-only** — samples are never removed in normal
+  operation.  Use :meth:`export_state` / :meth:`import_state` to
+  serialise across restarts.
+* ``max_samples_per_player`` in export truncates the oldest samples to
+  bound storage growth.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -10,6 +29,13 @@ EPSILON = 1e-9
 
 @dataclass(slots=True)
 class AuditSample:
+    """Single showdown observation.
+
+    Attributes:
+        expected_value: Opponent's equity at the time of all-in.
+        observed:       ``1.0`` if opponent won, ``0.0`` if lost.
+    """
+
     expected_value: float
     observed: float
 
@@ -20,6 +46,17 @@ class AuditSample:
 
 @dataclass(slots=True)
 class PlayerAuditStats:
+    """Aggregated statistics for a single player.
+
+    Attributes:
+        player_id:     Normalised opponent identifier.
+        sample_count:  Total observed showdowns.
+        residual_mean: Mean of ``(observed - expected)``.
+        residual_std:  Sample standard deviation of residuals.
+        z_score:       ``mean / standard_error``.
+        is_super_user: ``True`` when z-score exceeds the threshold.
+    """
+
     player_id: str
     sample_count: int
     residual_mean: float
@@ -29,6 +66,8 @@ class PlayerAuditStats:
 
 
 class RngAuditor:
+    """Accumulates showdown samples and flags statistically anomalous players."""
+
     def __init__(self, super_user_zscore: float = 3.0, min_samples: int = 25) -> None:
         self._samples: dict[str, list[AuditSample]] = defaultdict(list)
         self.super_user_zscore = float(super_user_zscore)

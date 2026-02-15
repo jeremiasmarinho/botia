@@ -1,3 +1,10 @@
+"""Interactive debug overlay — draws a crosshair at the cursor position.
+
+Opens a full-screen OpenCV preview with a green rectangle following the
+cursor so the developer can visually verify capture regions and click
+coordinates.
+"""
+
 from __future__ import annotations
 
 import argparse

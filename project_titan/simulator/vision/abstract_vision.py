@@ -1,3 +1,10 @@
+"""Abstract vision simulator — OCR/regex-based table reading.
+
+Provides a lightweight alternative to the YOLO pipeline by capturing
+screen regions and extracting card/pot/stack information via regex
+matching against clipboard or OCR text.
+"""
+
 from __future__ import annotations
 
 import argparse

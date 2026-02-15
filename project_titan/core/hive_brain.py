@@ -1,3 +1,17 @@
+"""HiveBrain — ZMQ-based multi-agent coordinator.
+
+Listens on a ``REP`` socket for agent check-in messages and returns
+partner lists + dead cards so each bot knows what the others hold.
+
+Collusion obfuscation: when exactly 2 bots are heads-up, the brain
+signals them to play aggressively against each other (never check-down)
+so observers see genuine combat.
+
+Backend selection:
+    * If a Redis connection succeeds → uses Redis (ttl-based sessions).
+    * Otherwise → in-memory dict (single-process only).
+"""
+
 from __future__ import annotations
 
 import json
@@ -23,6 +37,15 @@ _log = TitanLogger("HiveBrain")
 
 @dataclass(slots=True)
 class AgentSession:
+    """In-memory representation of a connected agent.
+
+    Attributes:
+        agent_id:   Unique identifier for this agent.
+        table_id:   Logical table the agent is seated at.
+        updated_at: Unix timestamp of the last check-in.
+        payload:    Raw check-in data (e.g. ``{"cards": [...]}``)
+    """
+
     agent_id: str
     table_id: str
     updated_at: float
@@ -30,6 +53,8 @@ class AgentSession:
 
 
 class HiveBrain:
+    """Central coordinator that mediates card sharing between friendly bots."""
+
     def __init__(self, bind_address: str, redis_url: str = "redis://127.0.0.1:6379/0", ttl_seconds: int = 5) -> None:
         self.bind_address = bind_address
         self.redis_url = redis_url

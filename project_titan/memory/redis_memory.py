@@ -1,3 +1,13 @@
+"""Redis-backed (or in-memory fallback) key-value store.
+
+Attempts to connect to Redis on init.  If the connection fails, falls
+back to a local dict with TTL-based expiry — the rest of the system
+works identically regardless of the backend.
+
+The active backend (``"redis"`` or ``"memory"``) is exposed via
+:attr:`RedisMemory.backend` for logging / diagnostics.
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +19,14 @@ from typing import Any
 
 @dataclass(slots=True)
 class RedisMemory:
+    """Dual-backend key-value store (Redis / in-memory).
+
+    Attributes:
+        redis_url:     Redis connection URL.
+        ttl_seconds:   Default time-to-live for stored values.
+        backend:       ``"redis"`` or ``"memory"`` (set during init).
+    """
+
     redis_url: str = "redis://127.0.0.1:6379/0"
     ttl_seconds: int = 5
     _cache: dict[str, Any] = field(default_factory=dict)
