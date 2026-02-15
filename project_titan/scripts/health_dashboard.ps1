@@ -67,6 +67,7 @@ foreach ($f in $healthFiles) {
       vision_compare = [string]$raw.checks.vision_profile.compare_status
       squad          = [string]$raw.checks.squad.status
       training       = [string]$raw.checks.training.status
+      e2e            = [string]$raw.checks.e2e.status
     }
   }
   catch {
@@ -133,6 +134,7 @@ $perCheck = [PSCustomObject]@{
   vision_compare = Get-CheckStats -Values ($entries | ForEach-Object { $_.vision_compare })
   squad          = Get-CheckStats -Values ($entries | ForEach-Object { $_.squad })
   training       = Get-CheckStats -Values ($entries | ForEach-Object { $_.training })
+  e2e            = Get-CheckStats -Values ($entries | ForEach-Object { $_.e2e })
 }
 
 # ── Vision trend (from vision_profile_compare files) ────────────
@@ -217,6 +219,7 @@ foreach ($e in $entries) {
     vision_compare = $e.vision_compare
     squad          = $e.squad
     training       = $e.training
+    e2e            = $e.e2e
   }
 }
 
@@ -248,10 +251,10 @@ if ($Json) {
 }
 else {
   # Pre-compute display strings to avoid PowerShell parse issues with % and nested quotes
-  $dEntries  = $totalEntries.ToString().PadLeft(5)
-  $dRate     = $passRatePct.ToString('0.0').PadLeft(5)
-  $dStreak   = $streakCount.ToString().PadLeft(3)
-  $dStreakSt  = $streakStatus.PadRight(8)
+  $dEntries = $totalEntries.ToString().PadLeft(5)
+  $dRate = $passRatePct.ToString('0.0').PadLeft(5)
+  $dStreak = $streakCount.ToString().PadLeft(3)
+  $dStreakSt = $streakStatus.PadRight(8)
 
   $bP = $perCheck.baseline.pass_count.ToString().PadLeft(4)
   $bF = $perCheck.baseline.fail_count.ToString().PadLeft(4)
@@ -271,6 +274,9 @@ else {
   $trP = $perCheck.training.pass_count.ToString().PadLeft(4)
   $trF = $perCheck.training.fail_count.ToString().PadLeft(4)
   $trR = $perCheck.training.pass_rate_pct.ToString('0.0').PadLeft(5)
+  $e2P = $perCheck.e2e.pass_count.ToString().PadLeft(4)
+  $e2F = $perCheck.e2e.fail_count.ToString().PadLeft(4)
+  $e2R = $perCheck.e2e.pass_rate_pct.ToString('0.0').PadLeft(5)
 
   Write-Host ''
   Write-Host '======================================================'
@@ -287,17 +293,18 @@ else {
   Write-Host "  vision_compare   $vcP  $vcF  $vcR pct"
   Write-Host "  squad            $sqP  $sqF  $sqR pct"
   Write-Host "  training         $trP  $trF  $trR pct"
+  Write-Host "  e2e              $e2P  $e2F  $e2R pct"
 
   if ($null -ne $visionTrend) {
     $p95First = $visionTrend.p95_ms.first.ToString('0.0000')
-    $p95Last  = $visionTrend.p95_ms.last.ToString('0.0000')
-    $p95D     = $visionTrend.p95_ms.delta_pct.ToString('+0.0;-0.0')
+    $p95Last = $visionTrend.p95_ms.last.ToString('0.0000')
+    $p95D = $visionTrend.p95_ms.delta_pct.ToString('+0.0;-0.0')
     $avgFirst = $visionTrend.avg_ms.first.ToString('0.00000')
-    $avgLast  = $visionTrend.avg_ms.last.ToString('0.00000')
-    $avgD     = $visionTrend.avg_ms.delta_pct.ToString('+0.0;-0.0')
+    $avgLast = $visionTrend.avg_ms.last.ToString('0.00000')
+    $avgD = $visionTrend.avg_ms.delta_pct.ToString('+0.0;-0.0')
     $fpsFirst = $visionTrend.fps.first.ToString('0.00')
-    $fpsLast  = $visionTrend.fps.last.ToString('0.00')
-    $fpsD     = $visionTrend.fps.delta_pct.ToString('+0.0;-0.0')
+    $fpsLast = $visionTrend.fps.last.ToString('0.00')
+    $fpsD = $visionTrend.fps.delta_pct.ToString('+0.0;-0.0')
 
     Write-Host '------------------------------------------------------'
     Write-Host "  VISION TREND     ($($visionTrend.entries) samples)"

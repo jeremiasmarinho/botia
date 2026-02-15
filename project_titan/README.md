@@ -15,6 +15,9 @@ Arquitetura modular por composição, com um loop central de orquestração e bl
   - `vision_tool.py`
   - `equity_tool.py`
   - `action_tool.py`
+  - `e2e_runner.py` (teste end-to-end completo)
+  - `visual_overlay.py` (overlay visual com bounding boxes + HUD)
+  - `smoke_e2e.py` (smoke test do pipeline E2E)
 - `memory/`: estado compartilhado
   - `redis_memory.py`
 - `training/`: infraestrutura de treino YOLO e calibração
@@ -357,7 +360,7 @@ Para visualizar tendência histórica de saúde do projeto (pass rate, streaks, 
 
 O dashboard agrega todos os `smoke_health_*.json` do diretório e produz:
 
-- **Pass rate** geral e por check (baseline, sweep, vision_profile, vision_compare, squad, training)
+- **Pass rate** geral e por check (baseline, sweep, vision_profile, vision_compare, squad, training, e2e)
 - **Current streak** (sequência atual de pass/fail)
 - **Vision trend** (p95, avg latency, FPS ao longo do tempo)
 - **Date range** do período analisado
@@ -442,6 +445,7 @@ Antes de abrir/mesclar PR em `main`, use este checklist:
 - [ ] `./scripts/smoke_squad.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_all.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_training.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_e2e.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_health_dashboard.ps1 -ReportDir reports` executou com sucesso.
 - [ ] Workflow `Project Titan Smoke` passou no PR.
 - [ ] Job `gate` do workflow `Project Titan Smoke` passou no PR.
@@ -513,6 +517,61 @@ Exemplo de mapeamento JSON:
   "pot_value_120": "pot_120"
 }
 ```
+
+## Teste End-to-End (E2E Runner)
+
+Pipeline completo: capture -> detect -> parse -> decide -> act -> report.
+
+### Modo simulado (sem emulador/YOLO)
+
+- `./scripts/e2e_runner.ps1 -Mode sim -Cycles 5 -Scenario cycle -ReportDir reports`
+- `./scripts/e2e_runner.ps1 -Mode sim -Cycles 10 -Visual`
+- `./scripts/e2e_runner.ps1 -Mode sim -Cycles 5 -SaveFrames reports/frames`
+
+### Modo real (com emulador + YOLO)
+
+- `./scripts/e2e_runner.ps1 -Mode real -Model best.pt -Cycles 20 -Visual`
+- `./scripts/e2e_runner.ps1 -Mode real -Model best.pt -SaveFrames reports/frames -ReportDir reports`
+
+### Python direto
+
+- `python tools/e2e_runner.py --mode sim --cycles 5 --scenario cycle --visual`
+- `python tools/e2e_runner.py --mode real --model best.pt --cycles 20 --save-frames reports/frames`
+- `python tools/e2e_runner.py --dry-run`
+
+### Smoke test E2E
+
+- `./scripts/smoke_e2e.ps1 -ReportDir reports`
+
+Valida: imports, dry-run, 3 ciclos sim, overlay logic, report schema.
+
+## Visual Overlay
+
+`tools/visual_overlay.py` renderiza bounding boxes de detecao YOLO + HUD com informacoes de decisao.
+
+### Sobre imagem salva
+
+- `python -m tools.visual_overlay --image frame.png --model best.pt`
+- `python -m tools.visual_overlay --image frame.png --model best.pt --save output.png`
+
+### Categorias visuais
+
+- **hero** (verde): cartas do jogador
+- **board** (dourado): cartas comunitarias
+- **dead** (cinza): cartas queimadas/vistas
+- **button** (laranja): botoes de acao (fold/call/raise)
+- **pot/stack** (amarelo): valores numericos
+- **opponent** (roxo): viloes detectados
+
+### HUD lateral
+
+Quando ativo (via `--visual` no E2E runner), exibe painel com:
+
+- Cartas hero + board
+- Pot e stack
+- Acao decidida com cor por tipo
+- Win rate e pot odds
+- Dificuldade e delay do GhostMouse
 
 ## Infraestrutura de treino YOLO
 
@@ -660,7 +719,7 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 
 1. ~~Treinar modelo YOLO com dataset de cartas PLO6~~ - infraestrutura pronta (`training/`), aguardando dataset real
 2. ~~Calibrar GhostMouse com coordenadas reais do emulador~~ - ferramenta pronta (`training/calibrate_ghost.py`), aguardando emulador
-3. Teste end-to-end com emulador real + modelo YOLO treinado
+3. ~~Teste end-to-end com emulador real + modelo YOLO treinado~~ - pipeline E2E pronto (`tools/e2e_runner.py` + `tools/visual_overlay.py`), aguardando emulador + modelo real
 4. Dashboard web para monitoramento em tempo real (mesas, agentes, RNG flags)
 
 ### Funcionalidades já implementadas
@@ -682,3 +741,5 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 - [x] Telemetria contínua de produção (health dashboard + vision trend + CI outputs)
 - [x] Infraestrutura de treino YOLO (data.yaml 58 classes, train/prepare/evaluate + smoke)
 - [x] Ferramenta de calibração GhostMouse (interativo, manual, validação, env export)
+- [x] Pipeline E2E com visual overlay (bounding boxes + HUD + frames salvos)
+- [x] Smoke test E2E (imports, dry-run, sim cycles, overlay, schema)

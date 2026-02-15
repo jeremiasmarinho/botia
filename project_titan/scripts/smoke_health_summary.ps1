@@ -26,8 +26,8 @@ function Get-LatestFile {
   )
 
   $file = Get-ChildItem -Path $Directory -Filter $Filter -File -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
 
   return $file
 }
@@ -36,14 +36,15 @@ $latestRunReport = Get-LatestFile -Directory $resolvedReportDir -Filter "run_rep
 $latestProfileSweep = Get-LatestFile -Directory $resolvedReportDir -Filter "sweep_summary_profile_*.json"
 $latestPositionSweep = Get-LatestFile -Directory $resolvedReportDir -Filter "sweep_summary_position_*.json"
 $latestVisionProfile = Get-ChildItem -Path $resolvedReportDir -Filter "vision_profile_*.json" -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -notlike "vision_profile_compare*" } |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object -First 1
+Where-Object { $_.Name -notlike "vision_profile_compare*" } |
+Sort-Object LastWriteTime -Descending |
+Select-Object -First 1
 $latestVisionCompare = Get-LatestFile -Directory $resolvedReportDir -Filter "vision_profile_compare_latest.json"
 $latestSquadLogA = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_agent01_*.log"
 $latestSquadLogB = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_agent02_*.log"
 $latestSquadLogHive = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_hivebrain_*.log"
 $latestTrainingReport = Get-LatestFile -Directory $resolvedReportDir -Filter "smoke_training_latest.json"
+$latestE2EReport = Get-LatestFile -Directory $resolvedReportDir -Filter "smoke_e2e_latest.json"
 
 $visionComparePayload = $null
 $visionCompareStatus = "unknown"
@@ -60,30 +61,34 @@ if ($null -ne $latestVisionCompare) {
 }
 
 $checks = [PSCustomObject]@{
-  baseline = [PSCustomObject]@{
-    status = if ($null -ne $latestRunReport) { "pass" } else { "unknown" }
+  baseline       = [PSCustomObject]@{
+    status   = if ($null -ne $latestRunReport) { "pass" } else { "unknown" }
     artifact = if ($null -ne $latestRunReport) { $latestRunReport.FullName } else { $null }
   }
-  sweep = [PSCustomObject]@{
-    status = if ($null -ne $latestProfileSweep -and $null -ne $latestPositionSweep) { "pass" } else { "unknown" }
-    profile_artifact = if ($null -ne $latestProfileSweep) { $latestProfileSweep.FullName } else { $null }
+  sweep          = [PSCustomObject]@{
+    status            = if ($null -ne $latestProfileSweep -and $null -ne $latestPositionSweep) { "pass" } else { "unknown" }
+    profile_artifact  = if ($null -ne $latestProfileSweep) { $latestProfileSweep.FullName } else { $null }
     position_artifact = if ($null -ne $latestPositionSweep) { $latestPositionSweep.FullName } else { $null }
   }
   vision_profile = [PSCustomObject]@{
-    status = if ($null -ne $latestVisionProfile) { "pass" } else { "unknown" }
+    status           = if ($null -ne $latestVisionProfile) { "pass" } else { "unknown" }
     profile_artifact = if ($null -ne $latestVisionProfile) { $latestVisionProfile.FullName } else { $null }
-    compare_status = $visionCompareStatus
+    compare_status   = $visionCompareStatus
     compare_artifact = if ($null -ne $latestVisionCompare) { $latestVisionCompare.FullName } else { $null }
   }
-  squad = [PSCustomObject]@{
-    status = if ($null -ne $latestSquadLogA -and $null -ne $latestSquadLogB -and $null -ne $latestSquadLogHive) { "pass" } else { "unknown" }
-    agent01_log = if ($null -ne $latestSquadLogA) { $latestSquadLogA.FullName } else { $null }
-    agent02_log = if ($null -ne $latestSquadLogB) { $latestSquadLogB.FullName } else { $null }
+  squad          = [PSCustomObject]@{
+    status        = if ($null -ne $latestSquadLogA -and $null -ne $latestSquadLogB -and $null -ne $latestSquadLogHive) { "pass" } else { "unknown" }
+    agent01_log   = if ($null -ne $latestSquadLogA) { $latestSquadLogA.FullName } else { $null }
+    agent02_log   = if ($null -ne $latestSquadLogB) { $latestSquadLogB.FullName } else { $null }
     hivebrain_log = if ($null -ne $latestSquadLogHive) { $latestSquadLogHive.FullName } else { $null }
   }
-  training = [PSCustomObject]@{
-    status = if ($null -ne $latestTrainingReport) { "pass" } else { "unknown" }
+  training       = [PSCustomObject]@{
+    status   = if ($null -ne $latestTrainingReport) { "pass" } else { "unknown" }
     artifact = if ($null -ne $latestTrainingReport) { $latestTrainingReport.FullName } else { $null }
+  }
+  e2e            = [PSCustomObject]@{
+    status   = if ($null -ne $latestE2EReport) { "pass" } else { "unknown" }
+    artifact = if ($null -ne $latestE2EReport) { $latestE2EReport.FullName } else { $null }
   }
 }
 
@@ -93,7 +98,8 @@ if (
   $checks.sweep.status -ne "pass" -or
   $checks.vision_profile.status -ne "pass" -or
   $checks.squad.status -ne "pass" -or
-  $checks.training.status -ne "pass"
+  $checks.training.status -ne "pass" -or
+  $checks.e2e.status -ne "pass"
 ) {
   $overallStatus = "unknown"
 }
@@ -102,12 +108,12 @@ if ($FailOnVisionRegression -and $visionCompareStatus -eq "fail") {
 }
 
 $payload = [PSCustomObject]@{
-  generated_at = (Get-Date).ToString("o")
-  report_dir = $resolvedReportDir
+  generated_at     = (Get-Date).ToString("o")
+  report_dir       = $resolvedReportDir
   duration_seconds = [math]::Round([double]$DurationSeconds, 3)
-  overall_status = $overallStatus
-  checks = $checks
-  policy = [PSCustomObject]@{
+  overall_status   = $overallStatus
+  checks           = $checks
+  policy           = [PSCustomObject]@{
     fail_on_vision_regression = [bool]$FailOnVisionRegression
   }
 }
@@ -124,7 +130,7 @@ if ($Json) {
 }
 else {
   Write-Host "[SMOKE-HEALTH] overall_status=$overallStatus duration_seconds=$([math]::Round([double]$DurationSeconds, 2))"
-  Write-Host "[SMOKE-HEALTH] baseline=$($checks.baseline.status) sweep=$($checks.sweep.status) vision=$($checks.vision_profile.status) squad=$($checks.squad.status) training=$($checks.training.status)"
+  Write-Host "[SMOKE-HEALTH] baseline=$($checks.baseline.status) sweep=$($checks.sweep.status) vision=$($checks.vision_profile.status) squad=$($checks.squad.status) training=$($checks.training.status) e2e=$($checks.e2e.status)"
   Write-Host "[SMOKE-HEALTH] vision_compare_status=$visionCompareStatus"
   Write-Host "[SMOKE-HEALTH] latest_file=$latestPath"
   Write-Host "[SMOKE-HEALTH] history_file=$historyPath"
