@@ -29,6 +29,8 @@ jobs:
       overall_status: ${{ steps.health.outputs.overall_status }}
       vision_compare_status: ${{ steps.health.outputs.vision_compare_status }}
       health_file: ${{ steps.health.outputs.health_file }}
+      dashboard_pass_rate: ${{ steps.health.outputs.dashboard_pass_rate }}
+      dashboard_streak: ${{ steps.health.outputs.dashboard_streak }}
     defaults:
       run:
         shell: pwsh
@@ -83,6 +85,25 @@ jobs:
           "- overall_status: $overallStatus" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- vision_compare_status: $visionStatus" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- health_file: $healthFile" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          $dashboardFile = Join-Path $PWD "reports\health_dashboard_latest.json"
+          $dashPassRate = "N/A"
+          $dashStreak = "N/A"
+          if (Test-Path $dashboardFile) {
+            try {
+              $dash = Get-Content -Path $dashboardFile -Raw | ConvertFrom-Json
+              if ($null -ne $dash.overall) {
+                $dashPassRate = "$($dash.overall.pass_rate_pct)%"
+                $dashStreak = "$($dash.overall.current_streak.count)x $($dash.overall.current_streak.status)"
+              }
+            } catch { }
+          }
+          "dashboard_pass_rate=$dashPassRate" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "dashboard_streak=$dashStreak" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "### Health Dashboard" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- pass_rate: $dashPassRate" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- current_streak: $dashStreak" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Build CI debug bundle on failure
         if: failure()

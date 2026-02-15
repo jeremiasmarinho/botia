@@ -24,6 +24,7 @@ if (-not (Test-Path $resolvedReportDir)) {
 }
 
 $files = Get-ChildItem -Path $resolvedReportDir -Filter "vision_profile_*.json" -File -ErrorAction SilentlyContinue |
+Where-Object { $_.Name -notlike "vision_profile_compare*" } |
 Sort-Object LastWriteTime -Descending |
 Select-Object -First 2
 

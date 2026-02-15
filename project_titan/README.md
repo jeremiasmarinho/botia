@@ -339,6 +339,32 @@ Para gerar resumo consolidado único dos checks de smoke (sem reexecutar tudo), 
 - `./scripts/smoke_health_summary.ps1 -ReportDir reports`
 - `./scripts/smoke_health_summary.ps1 -ReportDir reports -Json`
 
+### Health Dashboard (telemetria contínua)
+
+Para visualizar tendência histórica de saúde do projeto (pass rate, streaks, evolução do pipeline de visão):
+
+- `./scripts/health_dashboard.ps1 -ReportDir reports`
+- `./scripts/health_dashboard.ps1 -ReportDir reports -Json`
+- `./scripts/health_dashboard.ps1 -ReportDir reports -SaveDashboard`
+- `./scripts/health_dashboard.ps1 -ReportDir reports -SaveDashboard -MaxEntries 100`
+
+O dashboard agrega todos os `smoke_health_*.json` do diretório e produz:
+
+- **Pass rate** geral e por check (baseline, sweep, vision_profile, vision_compare, squad)
+- **Current streak** (sequência atual de pass/fail)
+- **Vision trend** (p95, avg latency, FPS ao longo do tempo)
+- **Date range** do período analisado
+- **History** compacto de cada entrada
+
+Com `-SaveDashboard`, gera arquivos estáveis:
+
+- `reports/health_dashboard_latest.json` (para CI/automação)
+- `reports/health_dashboard_*.json` (histórico timestampado)
+
+Para validar o dashboard (smoke test dedicado), use:
+
+- `./scripts/smoke_health_dashboard.ps1 -ReportDir reports`
+
 Para rodar baseline + sweep em uma única execução (status único para CI), use:
 
 - `./scripts/smoke_all.ps1 -ReportDir reports`
@@ -347,6 +373,7 @@ Ao final, o `smoke_all.ps1` também gera resumo consolidado em:
 
 - `reports/smoke_health_latest.json` (arquivo estável para CI/dashboard)
 - `reports/smoke_health_*.json` (histórico timestampado)
+- `reports/health_dashboard_latest.json` (dashboard de telemetria contínua)
 
 Para validar integração multi-agente (HiveBrain + 2 agentes + protocolo squad), use:
 
@@ -365,8 +392,10 @@ O job `smoke` também exporta outputs para automação:
 - `overall_status`
 - `vision_compare_status`
 - `health_file`
+- `dashboard_pass_rate`
+- `dashboard_streak`
 
-Além disso, escreve um resumo no `GITHUB_STEP_SUMMARY` com status consolidado do smoke health.
+Além disso, escreve um resumo no `GITHUB_STEP_SUMMARY` com status consolidado do smoke health e dashboard de telemetria.
 
 O job `gate` bloqueia merge quando `overall_status != pass`.
 
@@ -405,6 +434,7 @@ Antes de abrir/mesclar PR em `main`, use este checklist:
 - [ ] `./scripts/smoke_vision_profile.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_squad.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_all.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_health_dashboard.ps1 -ReportDir reports` executou com sucesso.
 - [ ] Workflow `Project Titan Smoke` passou no PR.
 - [ ] Job `gate` do workflow `Project Titan Smoke` passou no PR.
 - [ ] Arquivos de documentação afetados foram atualizados (`README`, scripts).
@@ -554,7 +584,6 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 2. Calibrar GhostMouse com coordenadas reais do emulador
 3. Teste end-to-end com emulador real + modelo YOLO treinado
 4. Dashboard web para monitoramento em tempo real (mesas, agentes, RNG flags)
-5. Telemetria contínua de produção (histórico de profiling + alertas de regressão)
 
 ### Funcionalidades já implementadas
 
@@ -572,3 +601,4 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 - [x] CI/CD com GitHub Actions
 - [x] Utilitário operacional de cache de calibração
 - [x] Profiling de performance do pipeline de visão a 30 FPS
+- [x] Telemetria contínua de produção (health dashboard + vision trend + CI outputs)

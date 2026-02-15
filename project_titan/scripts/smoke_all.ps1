@@ -50,4 +50,8 @@ Invoke-CheckedCommand -Label "Smoke health summary" -Command {
   powershell -ExecutionPolicy Bypass -File .\scripts\smoke_health_summary.ps1 -ReportDir $resolvedReportDir -DurationSeconds $duration
 } | Out-Null
 
+Invoke-CheckedCommand -Label "Health dashboard" -Command {
+  powershell -ExecutionPolicy Bypass -File .\scripts\health_dashboard.ps1 -ReportDir $resolvedReportDir -SaveDashboard
+} | Out-Null
+
 Write-Host "[SMOKE-ALL] OK duration_seconds=$duration report_dir=$resolvedReportDir"
