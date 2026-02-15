@@ -1,10 +1,17 @@
-"""Ghost Mouse – humanised cursor movement with Bézier curves.
+"""Ghost Mouse — movimento humanizado de cursor com curvas de Bézier.
 
-Implements the Ghost Protocol from the Project Titan spec:
-  • Bézier curves (never move in a straight line).
-  • Noise injection (small random arcs).
-  • Variable timing by decision complexity.
-  • Optional PyAutoGUI backend for real cursor control.
+Implementa o Ghost Protocol do Project Titan:
+  • Curvas de Bézier cúbicas (nunca move em linha reta).
+  • Injeção de ruído gaussiano (micro-arcos aleatórios).
+  • Velocidade variável por dificuldade da decisão (tweening).
+  • Coordenadas relativas à janela do emulador → absolutas na tela.
+  • Backend via PyAutoGUI para controle real do cursor.
+
+Segurança anti-detecção
+------------------------
+O movimento do mouse segue uma curva cúbica com 2 pontos de controle
+randômicos, ruído gaussiano por waypoint e hold-time variável no clique.
+A velocidade (ms/px) varia conforme a distância, impedindo padrões lineares.
 """
 
 from __future__ import annotations
@@ -12,8 +19,8 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from random import gauss, randint, uniform
-from typing import Sequence
+from random import gauss, uniform
+from typing import Any
 
 try:
     import pyautogui  # type: ignore[import-untyped]
@@ -163,30 +170,84 @@ def classify_difficulty(action: str, street: str = "preflop") -> str:
 # ---------------------------------------------------------------------------
 
 class GhostMouse:
-    """Humanised mouse controller with Bézier curves and variable timing."""
+    """Controlador humanizado de mouse com curvas de Bézier e timing variável.
+
+    O GhostMouse converte coordenadas **relativas à janela do emulador**
+    em coordenadas absolutas da tela antes de mover o cursor, garantindo
+    que cliques sempre caiam dentro da janela correta.
+
+    Ativação
+    --------
+    O controle real do mouse só acontece quando:
+      - ``PyAutoGUI`` está instalado, E
+      - ``TITAN_GHOST_MOUSE=1`` está definido.
+
+    Caso contrário, os métodos calculam delays e paths sem mover o cursor
+    (modo seguro para CI / testes).
+    """
 
     def __init__(self, config: GhostMouseConfig | None = None) -> None:
         self.config = config or GhostMouseConfig()
-        self._enabled = _HAS_PYAUTOGUI and os.getenv("TITAN_GHOST_MOUSE", "0").strip().lower() in {"1", "true", "yes", "on"}
+        self._enabled = _HAS_PYAUTOGUI and os.getenv(
+            "TITAN_GHOST_MOUSE", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
-    # -- public API ----------------------------------------------------------
+        # Offset da janela do emulador (definido pelo agente via set_window_offset)
+        self._window_left: int = 0
+        self._window_top: int = 0
 
-    def move_and_click(self, point: ClickPoint, difficulty: str = _DIFFICULTY_EASY) -> float:
-        """Move the cursor to *point* along a Bézier curve, click, and return the thinking delay (seconds).
+    # -- Configuração da janela do emulador ----------------------------------
 
-        If PyAutoGUI is unavailable or ``TITAN_GHOST_MOUSE`` is not enabled,
-        the method still computes and returns the delay without moving the
-        real cursor (safe for testing / CI).
+    def set_window_offset(self, left: int, top: int) -> None:
+        """Define o offset da janela do emulador para conversão de coordenadas.
+
+        Deve ser chamado pelo agente a cada ciclo, após localizar a janela,
+        para que ``move_and_click`` converta coords relativas → absolutas.
+
+        Args:
+            left: Posição X da janela na tela.
+            top:  Posição Y da janela na tela.
+        """
+        self._window_left = left
+        self._window_top = top
+
+    def _to_screen(self, point: ClickPoint) -> ClickPoint:
+        """Converte ponto relativo à janela → absoluto na tela."""
+        return ClickPoint(
+            x=point.x + self._window_left,
+            y=point.y + self._window_top,
+        )
+
+    # -- API pública ---------------------------------------------------------
+
+    def move_and_click(
+        self,
+        point: ClickPoint,
+        difficulty: str = _DIFFICULTY_EASY,
+        relative: bool = True,
+    ) -> float:
+        """Move o cursor até *point* via Bézier, clica e retorna o delay de "pensamento" (segundos).
+
+        Args:
+            point:      Coordenada do clique. Se ``relative=True`` (padrão),
+                        é relativa à janela do emulador.
+            difficulty: Nível de dificuldade para calcular o delay humano.
+            relative:   Se ``True``, aplica o offset da janela do emulador
+                        antes de mover o cursor.
+
+        Returns:
+            O delay de "pensamento" em segundos (já aguardado internamente).
         """
         delay = self._thinking_delay(difficulty)
 
         if self._enabled and pyautogui is not None:
-            self._execute_move_and_click(point)
+            target = self._to_screen(point) if relative else point
+            self._execute_move_and_click(target)
 
         return delay
 
     def compute_path(self, start: ClickPoint, end: ClickPoint) -> list[CurvePoint]:
-        """Return the Bézier waypoints without executing movement (useful for debugging / tests)."""
+        """Retorna os waypoints Bézier sem executar movimentação (útil para debug/testes)."""
         return _generate_bezier_path(
             CurvePoint(start.x, start.y),
             CurvePoint(end.x, end.y),
@@ -195,10 +256,10 @@ class GhostMouse:
             density=self.config.steps_per_100px,
         )
 
-    # -- internal helpers ----------------------------------------------------
+    # -- Helpers internos ----------------------------------------------------
 
     def _thinking_delay(self, difficulty: str) -> float:
-        """Return a random delay matching the decision difficulty."""
+        """Retorna um delay aleatório proporcional à dificuldade da decisão."""
         if difficulty == _DIFFICULTY_HARD:
             lo, hi = self.config.timing_hard
         elif difficulty == _DIFFICULTY_MEDIUM:
@@ -208,7 +269,12 @@ class GhostMouse:
         return uniform(lo, hi)
 
     def _execute_move_and_click(self, target: ClickPoint) -> None:
-        """Perform actual Bézier mouse movement + click via PyAutoGUI."""
+        """Executa movimento Bézier real + clique via PyAutoGUI.
+
+        O cursor percorre a curva interpolada com pausa proporcional
+        à distância, depois segura o clique por um tempo aleatório
+        para simular comportamento humano.
+        """
         assert pyautogui is not None
 
         current_x, current_y = pyautogui.position()

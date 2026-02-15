@@ -10,3 +10,4 @@ pygetwindow>=0.0.9
 opencv-python>=4.10
 treys>=0.1.8
 pyyaml>=6.0
+pydirectinput>=1.0
