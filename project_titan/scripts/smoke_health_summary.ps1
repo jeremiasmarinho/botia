@@ -43,6 +43,7 @@ $latestVisionCompare = Get-LatestFile -Directory $resolvedReportDir -Filter "vis
 $latestSquadLogA = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_agent01_*.log"
 $latestSquadLogB = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_agent02_*.log"
 $latestSquadLogHive = Get-LatestFile -Directory $resolvedReportDir -Filter "squad_hivebrain_*.log"
+$latestTrainingReport = Get-LatestFile -Directory $resolvedReportDir -Filter "smoke_training_latest.json"
 
 $visionComparePayload = $null
 $visionCompareStatus = "unknown"
@@ -80,6 +81,10 @@ $checks = [PSCustomObject]@{
     agent02_log = if ($null -ne $latestSquadLogB) { $latestSquadLogB.FullName } else { $null }
     hivebrain_log = if ($null -ne $latestSquadLogHive) { $latestSquadLogHive.FullName } else { $null }
   }
+  training = [PSCustomObject]@{
+    status = if ($null -ne $latestTrainingReport) { "pass" } else { "unknown" }
+    artifact = if ($null -ne $latestTrainingReport) { $latestTrainingReport.FullName } else { $null }
+  }
 }
 
 $overallStatus = "pass"
@@ -87,7 +92,8 @@ if (
   $checks.baseline.status -ne "pass" -or
   $checks.sweep.status -ne "pass" -or
   $checks.vision_profile.status -ne "pass" -or
-  $checks.squad.status -ne "pass"
+  $checks.squad.status -ne "pass" -or
+  $checks.training.status -ne "pass"
 ) {
   $overallStatus = "unknown"
 }
@@ -118,7 +124,7 @@ if ($Json) {
 }
 else {
   Write-Host "[SMOKE-HEALTH] overall_status=$overallStatus duration_seconds=$([math]::Round([double]$DurationSeconds, 2))"
-  Write-Host "[SMOKE-HEALTH] baseline=$($checks.baseline.status) sweep=$($checks.sweep.status) vision=$($checks.vision_profile.status) squad=$($checks.squad.status)"
+  Write-Host "[SMOKE-HEALTH] baseline=$($checks.baseline.status) sweep=$($checks.sweep.status) vision=$($checks.vision_profile.status) squad=$($checks.squad.status) training=$($checks.training.status)"
   Write-Host "[SMOKE-HEALTH] vision_compare_status=$visionCompareStatus"
   Write-Host "[SMOKE-HEALTH] latest_file=$latestPath"
   Write-Host "[SMOKE-HEALTH] history_file=$historyPath"

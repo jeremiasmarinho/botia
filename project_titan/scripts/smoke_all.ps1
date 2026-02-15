@@ -44,6 +44,10 @@ Invoke-CheckedCommand -Label "Squad smoke" -Command {
   powershell -ExecutionPolicy Bypass -File .\scripts\smoke_squad.ps1 -ReportDir $resolvedReportDir
 } | Out-Null
 
+Invoke-CheckedCommand -Label "Training smoke" -Command {
+  powershell -ExecutionPolicy Bypass -File .\scripts\smoke_training.ps1 -ReportDir $resolvedReportDir
+} | Out-Null
+
 $duration = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 2)
 
 Invoke-CheckedCommand -Label "Smoke health summary" -Command {

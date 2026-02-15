@@ -17,6 +17,13 @@ Arquitetura modular por composição, com um loop central de orquestração e bl
   - `action_tool.py`
 - `memory/`: estado compartilhado
   - `redis_memory.py`
+- `training/`: infraestrutura de treino YOLO e calibração
+  - `data.yaml` (config de dataset, 58 classes)
+  - `train_yolo.py` (wrapper de treino YOLOv8)
+  - `prepare_dataset.py` (split, validação, stats)
+  - `evaluate_yolo.py` (avaliação mAP + benchmark de latência)
+  - `smoke_training.py` (smoke test da infra de treino)
+  - `calibrate_ghost.py` (calibração de coordenadas GhostMouse)
 
 ## Estrutura legada mantida
 
@@ -350,7 +357,7 @@ Para visualizar tendência histórica de saúde do projeto (pass rate, streaks, 
 
 O dashboard agrega todos os `smoke_health_*.json` do diretório e produz:
 
-- **Pass rate** geral e por check (baseline, sweep, vision_profile, vision_compare, squad)
+- **Pass rate** geral e por check (baseline, sweep, vision_profile, vision_compare, squad, training)
 - **Current streak** (sequência atual de pass/fail)
 - **Vision trend** (p95, avg latency, FPS ao longo do tempo)
 - **Date range** do período analisado
@@ -434,6 +441,7 @@ Antes de abrir/mesclar PR em `main`, use este checklist:
 - [ ] `./scripts/smoke_vision_profile.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_squad.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_all.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_training.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_health_dashboard.ps1 -ReportDir reports` executou com sucesso.
 - [ ] Workflow `Project Titan Smoke` passou no PR.
 - [ ] Job `gate` do workflow `Project Titan Smoke` passou no PR.
@@ -505,6 +513,76 @@ Exemplo de mapeamento JSON:
   "pot_value_120": "pot_120"
 }
 ```
+
+## Infraestrutura de treino YOLO
+
+### Dataset (58 classes)
+
+Configurado em `training/data.yaml`:
+
+- 52 cartas: `2c`, `2d`, `2h`, `2s`, ..., `Ac`, `Ad`, `Ah`, `As`
+- 4 botões de ação: `btn_fold`, `btn_call`, `btn_raise_small`, `btn_raise_big`
+- 2 regiões numéricas: `pot`, `stack`
+
+### Pipeline de treino
+
+1. **Preparar dataset** (split + validação):
+   - `python training/prepare_dataset.py --source datasets/raw --output datasets/titan_cards`
+   - `python training/prepare_dataset.py --source datasets/titan_cards --validate-only`
+   - `python training/prepare_dataset.py --source datasets/titan_cards --stats-only`
+
+2. **Treinar modelo YOLOv8**:
+   - `python training/train_yolo.py --epochs 100 --batch 16 --imgsz 640`
+   - `python training/train_yolo.py --epochs 100 --save-report --report-dir reports`
+   - `python training/train_yolo.py --resume runs/detect/train/weights/last.pt`
+   - `python training/train_yolo.py --dry-run` (valida config sem treinar)
+
+3. **Avaliar modelo**:
+   - `python training/evaluate_yolo.py --model runs/detect/train/weights/best.pt`
+   - `python training/evaluate_yolo.py --model best.pt --benchmark --benchmark-frames 100`
+   - `python training/evaluate_yolo.py --model best.pt --dry-run` (valida config)
+
+### Variáveis de ambiente de treino
+
+- `TITAN_YOLO_DEVICE`: device para treino (`cpu`, `0`, `cuda:0`; padrão: auto)
+- `TITAN_YOLO_WORKERS`: workers para dataloader (padrão: `2`)
+
+### Smoke test de treino
+
+- `./scripts/smoke_training.ps1 -ReportDir reports`
+
+Valida infraestrutura sem dados reais: parsing do data.yaml, coerência de classes, dry-run do treino e avaliação.
+
+## Calibração do GhostMouse
+
+Ferramenta para capturar e gerenciar coordenadas de botões do emulador.
+
+### Modos de uso
+
+- **Interativo** (requer PyAutoGUI):
+  - `python training/calibrate_ghost.py interactive --profile meu_emulador`
+  - Pressione Enter sobre cada botão para capturar posição.
+
+- **Manual** (CLI args):
+  - `python training/calibrate_ghost.py manual --profile meu_emulador --fold 600,700 --call 800,700 --raise-small 1000,700 --raise-big 1000,700`
+
+- **Visualizar perfil**:
+  - `python training/calibrate_ghost.py show --profile meu_emulador`
+
+- **Validar perfil** (integridade):
+  - `python training/calibrate_ghost.py validate --profile meu_emulador`
+
+- **Gerar env vars** (para shell):
+  - `python training/calibrate_ghost.py env --profile meu_emulador`
+
+### Wrapper PowerShell
+
+- `./scripts/calibrate_ghost.ps1 -Mode manual -Profile meu_emulador -FoldCoord 600,700 -CallCoord 800,700 -RaiseSmallCoord 1000,700 -RaiseBigCoord 1000,700`
+- `./scripts/calibrate_ghost.ps1 -Mode show -Profile meu_emulador`
+- `./scripts/calibrate_ghost.ps1 -Mode validate -Profile meu_emulador`
+- `./scripts/calibrate_ghost.ps1 -Mode env -Profile meu_emulador`
+
+Perfis salvos em `reports/calibration_profiles/calibration_{nome}.json`.
 
 ## APK Android (PoC)
 
@@ -580,8 +658,8 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 
 ## Proximos passos sugeridos
 
-1. Treinar modelo YOLO com dataset de cartas PLO6 (canto superior esquerdo)
-2. Calibrar GhostMouse com coordenadas reais do emulador
+1. ~~Treinar modelo YOLO com dataset de cartas PLO6~~ - infraestrutura pronta (`training/`), aguardando dataset real
+2. ~~Calibrar GhostMouse com coordenadas reais do emulador~~ - ferramenta pronta (`training/calibrate_ghost.py`), aguardando emulador
 3. Teste end-to-end com emulador real + modelo YOLO treinado
 4. Dashboard web para monitoramento em tempo real (mesas, agentes, RNG flags)
 
@@ -602,3 +680,5 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 - [x] Utilitário operacional de cache de calibração
 - [x] Profiling de performance do pipeline de visão a 30 FPS
 - [x] Telemetria contínua de produção (health dashboard + vision trend + CI outputs)
+- [x] Infraestrutura de treino YOLO (data.yaml 58 classes, train/prepare/evaluate + smoke)
+- [x] Ferramenta de calibração GhostMouse (interativo, manual, validação, env export)

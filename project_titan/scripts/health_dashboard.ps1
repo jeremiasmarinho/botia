@@ -66,6 +66,7 @@ foreach ($f in $healthFiles) {
       vision_profile = [string]$raw.checks.vision_profile.status
       vision_compare = [string]$raw.checks.vision_profile.compare_status
       squad          = [string]$raw.checks.squad.status
+      training       = [string]$raw.checks.training.status
     }
   }
   catch {
@@ -131,6 +132,7 @@ $perCheck = [PSCustomObject]@{
   vision_profile = Get-CheckStats -Values ($entries | ForEach-Object { $_.vision_profile })
   vision_compare = Get-CheckStats -Values ($entries | ForEach-Object { $_.vision_compare })
   squad          = Get-CheckStats -Values ($entries | ForEach-Object { $_.squad })
+  training       = Get-CheckStats -Values ($entries | ForEach-Object { $_.training })
 }
 
 # ── Vision trend (from vision_profile_compare files) ────────────
@@ -214,6 +216,7 @@ foreach ($e in $entries) {
     vision_profile = $e.vision_profile
     vision_compare = $e.vision_compare
     squad          = $e.squad
+    training       = $e.training
   }
 }
 
@@ -265,6 +268,9 @@ else {
   $sqP = $perCheck.squad.pass_count.ToString().PadLeft(4)
   $sqF = $perCheck.squad.fail_count.ToString().PadLeft(4)
   $sqR = $perCheck.squad.pass_rate_pct.ToString('0.0').PadLeft(5)
+  $trP = $perCheck.training.pass_count.ToString().PadLeft(4)
+  $trF = $perCheck.training.fail_count.ToString().PadLeft(4)
+  $trR = $perCheck.training.pass_rate_pct.ToString('0.0').PadLeft(5)
 
   Write-Host ''
   Write-Host '======================================================'
@@ -280,6 +286,7 @@ else {
   Write-Host "  vision_profile   $vpP  $vpF  $vpR pct"
   Write-Host "  vision_compare   $vcP  $vcF  $vcR pct"
   Write-Host "  squad            $sqP  $sqF  $sqR pct"
+  Write-Host "  training         $trP  $trF  $trR pct"
 
   if ($null -ne $visionTrend) {
     $p95First = $visionTrend.p95_ms.first.ToString('0.0000')
