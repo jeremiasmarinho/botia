@@ -57,27 +57,54 @@ class PokerHandWorkflow:
         return "preflop"
 
     @staticmethod
-    def _select_action(win_rate: float, tie_rate: float, street: str, pot: float, stack: float) -> str:
-        thresholds: dict[str, tuple[float, float]] = {
-            "preflop": (0.60, 0.38),
-            "flop": (0.64, 0.42),
-            "turn": (0.67, 0.45),
-            "river": (0.70, 0.48),
+    def _pot_odds(pot: float, stack: float) -> float:
+        if pot <= 0 or stack <= 0:
+            return 0.0
+        return pot / max(pot + stack, 1e-6)
+
+    @classmethod
+    def _select_action(
+        cls,
+        win_rate: float,
+        tie_rate: float,
+        street: str,
+        pot: float,
+        stack: float,
+        information_quality: float,
+    ) -> tuple[str, float, float]:
+        base_thresholds: dict[str, tuple[float, float, float]] = {
+            "preflop": (0.40, 0.62, 0.75),
+            "flop": (0.44, 0.65, 0.78),
+            "turn": (0.47, 0.69, 0.82),
+            "river": (0.50, 0.72, 0.85),
         }
 
-        raise_threshold, call_threshold = thresholds.get(street, (0.64, 0.42))
+        call_threshold, raise_small_threshold, raise_big_threshold = base_thresholds.get(street, (0.44, 0.65, 0.78))
         score = win_rate + (tie_rate * 0.5)
+        pot_odds = cls._pot_odds(pot, stack)
 
-        if pot > 0 and stack > 0:
-            pressure = min(pot / max(stack, 1e-6), 2.5)
-            call_threshold += min(pressure * 0.02, 0.04)
-            raise_threshold += min(pressure * 0.01, 0.03)
+        call_threshold += min(pot_odds * 0.35, 0.08)
+        raise_small_threshold += min(pot_odds * 0.15, 0.05)
+        raise_big_threshold += min(pot_odds * 0.10, 0.04)
 
-        if score >= raise_threshold:
-            return "raise"
+        information_penalty = max(0.0, 1.0 - information_quality) * 0.06
+        call_threshold += information_penalty
+        raise_small_threshold += information_penalty * 0.8
+        raise_big_threshold += information_penalty * 0.5
+
+        if score >= raise_big_threshold:
+            return "raise_big", score, pot_odds
+        if score >= raise_small_threshold:
+            return "raise_small", score, pot_odds
         if score >= call_threshold:
-            return "call"
-        return "fold"
+            return "call", score, pot_odds
+        return "fold", score, pot_odds
+
+
+    @staticmethod
+    def _information_quality(hero_cards: list[str], board_cards: list[str], dead_cards: list[str]) -> float:
+        observed = len(hero_cards) + len(board_cards) + len(dead_cards)
+        return min(max(observed / 12.0, 0.0), 1.0)
 
     def execute(self) -> str:
         snapshot = self.vision.read_table()
@@ -99,16 +126,22 @@ class PokerHandWorkflow:
 
         estimate = self.equity.estimate(snapshot.hero_cards, snapshot.board_cards, dead_cards=dead_cards)
         street = self._street_from_board(snapshot.board_cards)
+        info_quality = self._information_quality(snapshot.hero_cards, snapshot.board_cards, dead_cards)
+        score = estimate.win_rate + (estimate.tie_rate * 0.5)
+        pot_odds = self._pot_odds(snapshot.pot, snapshot.stack)
 
         if len(snapshot.hero_cards) < 2:
             decision = "wait"
+            score = 0.0
+            pot_odds = self._pot_odds(snapshot.pot, snapshot.stack)
         else:
-            decision = self._select_action(
+            decision, score, pot_odds = self._select_action(
                 win_rate=estimate.win_rate,
                 tie_rate=estimate.tie_rate,
                 street=street,
                 pot=snapshot.pot,
                 stack=snapshot.stack,
+                information_quality=info_quality,
             )
 
         result = self.action.act(decision)
@@ -120,6 +153,9 @@ class PokerHandWorkflow:
                 "dead_cards": dead_cards,
                 "win_rate": estimate.win_rate,
                 "tie_rate": estimate.tie_rate,
+                "score": round(score, 4),
+                "pot_odds": round(pot_odds, 4),
+                "information_quality": round(info_quality, 4),
                 "street": street,
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,

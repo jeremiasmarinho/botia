@@ -80,6 +80,14 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 
 `dead_cards` agora é consolidado entre visão e memória compartilhada (`memory["dead_cards"]`) no workflow.
 
+## Política de ação avançada
+
+`workflows/poker_hand_workflow.py` agora usa política por street com sizing:
+
+- `fold`, `call`, `raise_small`, `raise_big`
+
+A decisão considera `win_rate`, `tie_rate`, `pot_odds` e qualidade da informação observada na mesa.
+
 ## Modo simulado (sem YOLO, para teste rápido)
 
 Para ver decisões variando no Windows sem visão real, use:
@@ -148,4 +156,4 @@ Build recomendado via WSL/Linux com Buildozer.
 1. Ajustar regras/benchmark de Monte Carlo para PLO em produção
 2. Aumentar cobertura de labels dead/burn/muck no dataset YOLO
 3. Implementar parser de labels YOLO específico do dataset
-4. Implementar política avançada no `workflows/poker_hand_workflow.py`
+4. Calibrar thresholds/sizing por perfil de mesa e posição
