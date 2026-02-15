@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 import re
 from typing import Any
@@ -58,6 +59,7 @@ class VisionTool:
         self.model_path = model_path or os.getenv("TITAN_YOLO_MODEL", "")
         self.monitor = monitor
         self.debug_labels = os.getenv("TITAN_VISION_DEBUG_LABELS", "0") == "1"
+        self.label_aliases = self._load_label_aliases()
         self.sim_scenario = os.getenv("TITAN_SIM_SCENARIO", "off").strip().lower()
         self._sim_index = 0
         self._unknown_labels: set[str] = set()
@@ -78,6 +80,48 @@ class VisionTool:
         except Exception as error:
             self._model = None
             self._load_error = str(error)
+
+    def _load_label_aliases(self) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+
+        def add_aliases(raw_aliases: dict[Any, Any]) -> None:
+            for raw_key, raw_value in raw_aliases.items():
+                if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+                    continue
+                key = raw_key.strip().lower()
+                value = raw_value.strip()
+                if not key or not value:
+                    continue
+                aliases[key] = value
+
+        alias_map_file = os.getenv("TITAN_VISION_LABEL_MAP_FILE", "").strip()
+        if alias_map_file:
+            try:
+                with open(alias_map_file, "r", encoding="utf-8") as file_obj:
+                    loaded = json.load(file_obj)
+                if isinstance(loaded, dict):
+                    add_aliases(loaded)
+            except Exception as error:
+                if self.debug_labels:
+                    print(f"[VisionTool] label map file error: {error}")
+
+        alias_map_json = os.getenv("TITAN_VISION_LABEL_MAP_JSON", "").strip()
+        if alias_map_json:
+            try:
+                loaded = json.loads(alias_map_json)
+                if isinstance(loaded, dict):
+                    add_aliases(loaded)
+            except Exception as error:
+                if self.debug_labels:
+                    print(f"[VisionTool] label map json error: {error}")
+
+        return aliases
+
+    def _apply_alias(self, label: str) -> str:
+        alias = self.label_aliases.get(label.strip().lower())
+        if alias is not None:
+            return alias
+        return label
 
     @staticmethod
     def _is_card_label(label: str) -> bool:
@@ -122,7 +166,7 @@ class VisionTool:
         return None
 
     def _parse_label(self, label: str) -> tuple[str | None, str | None, float | None]:
-        normalized = label.strip()
+        normalized = self._apply_alias(label).strip()
         lowered = normalized.lower()
 
         direct_card = self._normalize_card_token(normalized)
@@ -141,19 +185,19 @@ class VisionTool:
         ]
 
         for pattern in hero_patterns:
-            match = re.match(pattern, lowered)
+            match = re.match(pattern, normalized, flags=re.IGNORECASE)
             if match is not None:
                 candidate = self._normalize_card_token(match.group(match.lastindex or 1))
                 return ("hero", candidate, None)
 
         for pattern in board_patterns:
-            match = re.match(pattern, lowered)
+            match = re.match(pattern, normalized, flags=re.IGNORECASE)
             if match is not None:
                 candidate = self._normalize_card_token(match.group(match.lastindex or 1))
                 return ("board", candidate, None)
 
         for pattern in dead_patterns:
-            match = re.match(pattern, lowered)
+            match = re.match(pattern, normalized, flags=re.IGNORECASE)
             if match is not None:
                 candidate = self._normalize_card_token(match.group(match.lastindex or 1))
                 return ("dead", candidate, None)

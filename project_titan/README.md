@@ -57,6 +57,8 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_MONITOR_WIDTH`
 - `TITAN_MONITOR_HEIGHT`
 - `TITAN_VISION_DEBUG_LABELS=1`: imprime labels desconhecidos no terminal
+- `TITAN_VISION_LABEL_MAP_FILE`: caminho de JSON com aliases de labels do dataset
+- `TITAN_VISION_LABEL_MAP_JSON`: JSON inline com aliases de labels
 
 Exemplo (PowerShell):
 
@@ -88,6 +90,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -OpenLastReport`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -PrintLastReport`
+- `./scripts/run_windows.ps1 -Ticks 10 -LabelMapFile simulator/vision/label_map.example.json`
 
 Também é possível forçar um cenário específico:
 
@@ -111,6 +114,21 @@ Para persistir em arquivo `.json`, informe `-ReportDir` no script Windows (ou de
 Para abrir automaticamente o último relatório gerado ao final da execução, use `-OpenLastReport`.
 
 Para imprimir o último relatório JSON no terminal ao final da execução, use `-PrintLastReport`.
+
+### Alias de labels por dataset (YOLO)
+
+Você pode mapear labels do dataset para labels canônicos aceitos pelo parser.
+
+Exemplo de mapeamento JSON:
+
+```json
+{
+  "hero-card-1-ah": "hero_Ah",
+  "table-flop-kd": "board_Kd",
+  "burn-card-1": "dead_7c",
+  "pot_value_120": "pot_120"
+}
+```
 
 ## APK Android (PoC)
 

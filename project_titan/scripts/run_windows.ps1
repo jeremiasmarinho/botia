@@ -8,7 +8,8 @@ param(
   [double]$TickSeconds = 0.2,
   [string]$ReportDir = "",
   [switch]$OpenLastReport,
-  [switch]$PrintLastReport
+  [switch]$PrintLastReport,
+  [string]$LabelMapFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,7 @@ $_previousSimScenario = $env:TITAN_SIM_SCENARIO
 $_previousMaxTicks = $env:TITAN_MAX_TICKS
 $_previousTickSeconds = $env:TITAN_TICK_SECONDS
 $_previousReportDir = $env:TITAN_REPORT_DIR
+$_previousLabelMapFile = $env:TITAN_VISION_LABEL_MAP_FILE
 $resolvedReportDir = $null
 
 try {
@@ -58,6 +60,17 @@ try {
 
   $env:TITAN_TICK_SECONDS = "$TickSeconds"
   Write-Host "[RUN] TITAN_TICK_SECONDS=$TickSeconds"
+
+  if (-not [string]::IsNullOrWhiteSpace($LabelMapFile)) {
+    if ([System.IO.Path]::IsPathRooted($LabelMapFile)) {
+      $resolvedLabelMapFile = $LabelMapFile
+    }
+    else {
+      $resolvedLabelMapFile = Join-Path $projectRoot $LabelMapFile
+    }
+    $env:TITAN_VISION_LABEL_MAP_FILE = "$resolvedLabelMapFile"
+    Write-Host "[RUN] TITAN_VISION_LABEL_MAP_FILE=$resolvedLabelMapFile"
+  }
 
   if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
     if ([System.IO.Path]::IsPathRooted($ReportDir)) {
@@ -149,6 +162,13 @@ finally {
   }
   else {
     $env:TITAN_REPORT_DIR = $_previousReportDir
+  }
+
+  if ($null -eq $_previousLabelMapFile) {
+    Remove-Item Env:TITAN_VISION_LABEL_MAP_FILE -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_VISION_LABEL_MAP_FILE = $_previousLabelMapFile
   }
 
   Pop-Location
