@@ -74,7 +74,16 @@ class Orchestrator:
 def main() -> None:
     max_ticks_raw = os.getenv("TITAN_MAX_TICKS", "").strip()
     max_ticks = int(max_ticks_raw) if max_ticks_raw.isdigit() else None
-    Orchestrator(config=EngineConfig(max_ticks=max_ticks)).run()
+    tick_seconds_raw = os.getenv("TITAN_TICK_SECONDS", "").strip()
+    try:
+        tick_seconds = float(tick_seconds_raw) if tick_seconds_raw else 0.2
+    except ValueError:
+        tick_seconds = 0.2
+
+    if tick_seconds <= 0:
+        tick_seconds = 0.2
+
+    Orchestrator(config=EngineConfig(tick_seconds=tick_seconds, max_ticks=max_ticks)).run()
 
 
 if __name__ == "__main__":

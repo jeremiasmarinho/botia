@@ -77,6 +77,7 @@ Para ver decisões variando no Windows sem visão real, use:
 
 - `./scripts/run_windows.ps1 -SimScenario cycle`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TickSeconds 0.1`
 
 Também é possível forçar um cenário específico:
 
@@ -86,6 +87,8 @@ Também é possível forçar um cenário específico:
 - `./scripts/run_windows.ps1 -HealthOnly -SimScenario raise`
 
 Para execução finita (encerra sozinha), use `-Ticks`.
+
+Para controlar a velocidade do loop, use `-TickSeconds` (padrão `0.2`).
 
 ## APK Android (PoC)
 
