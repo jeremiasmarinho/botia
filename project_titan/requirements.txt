@@ -1,0 +1,11 @@
+numpy>=1.26
+scipy>=1.11
+pyzmq>=26.0
+redis>=5.0
+ultralytics>=8.3
+mss>=9.0
+pyautogui>=0.9
+colorama>=0.4
+pygetwindow>=0.0.9
+opencv-python>=4.10
+treys>=0.1.8
