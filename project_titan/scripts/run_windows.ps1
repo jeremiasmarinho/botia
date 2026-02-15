@@ -6,7 +6,8 @@ param(
   [int]$Ticks = 0,
   [ValidateRange(0.05, 10.0)]
   [double]$TickSeconds = 0.2,
-  [string]$ReportDir = ""
+  [string]$ReportDir = "",
+  [switch]$OpenLastReport
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +42,7 @@ $_previousSimScenario = $env:TITAN_SIM_SCENARIO
 $_previousMaxTicks = $env:TITAN_MAX_TICKS
 $_previousTickSeconds = $env:TITAN_TICK_SECONDS
 $_previousReportDir = $env:TITAN_REPORT_DIR
+$resolvedReportDir = $null
 
 try {
   if ($SimScenario -ne "off") {
@@ -63,6 +65,12 @@ try {
     else {
       $resolvedReportDir = Join-Path $projectRoot $ReportDir
     }
+  }
+  elseif ($OpenLastReport -and -not $HealthOnly) {
+    $resolvedReportDir = Join-Path $projectRoot "reports"
+  }
+
+  if ($null -ne $resolvedReportDir) {
     $env:TITAN_REPORT_DIR = "$resolvedReportDir"
     Write-Host "[RUN] TITAN_REPORT_DIR=$resolvedReportDir"
   }
@@ -81,6 +89,29 @@ try {
 
   Write-Host "[2/2] Starting orchestrator engine... (Ctrl+C para parar)"
   & $pythonExe -m orchestrator.engine
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "Engine finalizou com código $LASTEXITCODE"
+  }
+
+  if ($OpenLastReport -and $null -ne $resolvedReportDir) {
+    $latestReport = Get-ChildItem -Path $resolvedReportDir -Filter run_report_*.json -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+    if ($null -ne $latestReport) {
+      try {
+        Start-Process -FilePath $latestReport.FullName | Out-Null
+        Write-Host "[RUN] Opened latest report: $($latestReport.FullName)"
+      }
+      catch {
+        Write-Warning "Não foi possível abrir o relatório automaticamente: $($latestReport.FullName)"
+      }
+    }
+    else {
+      Write-Warning "Nenhum relatório encontrado em: $resolvedReportDir"
+    }
+  }
 }
 finally {
   if ($null -eq $_previousSimScenario) {
