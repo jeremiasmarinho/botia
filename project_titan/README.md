@@ -42,6 +42,7 @@ Se `TITAN_YOLO_MODEL` não for definido, o sistema continua em modo stub (snapsh
 
 - Hero cards: `hero_Ah`, `hole_Kd`, `hand_Qs`, `player_9c`, `h1_Ah`
 - Board cards: `board_7d`, `flop_Kh`, `turn_2c`, `river_As`, `b3_Qd`
+- Dead cards: `dead_Ah`, `burn_7c`, `muck_Qd`, `folded_9s`, `dc_2h`
 - Card genérico: `Ah`, `card_Ah`, `10h` (normaliza para `Th`)
 - Formato por palavras: `ace_hearts`, `ten_spades`, `queen_diamonds`
 - Pot/stack numérico no label: `pot_23.5`, `stack_120.0`, `hero_stack_88`
@@ -74,6 +75,8 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 ## Equity Monte Carlo
 
 `core/math_engine.py` agora usa simulação Monte Carlo com `treys` para estimar `win_rate` e `tie_rate`.
+
+`dead_cards` agora é consolidado entre visão e memória compartilhada (`memory["dead_cards"]`) no workflow.
 
 ## Modo simulado (sem YOLO, para teste rápido)
 
@@ -125,6 +128,6 @@ Build recomendado via WSL/Linux com Buildozer.
 ## Próximos passos sugeridos
 
 1. Ajustar regras/benchmark de Monte Carlo para PLO em produção
-2. Popular `dead_cards` via memória compartilhada da mesa
+2. Aumentar cobertura de labels dead/burn/muck no dataset YOLO
 3. Implementar parser de labels YOLO específico do dataset
 4. Implementar política avançada no `workflows/poker_hand_workflow.py`

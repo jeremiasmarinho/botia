@@ -22,6 +22,30 @@ class PokerHandWorkflow:
     memory: SupportsMemory
 
     @staticmethod
+    def _normalize_card(card: str) -> str | None:
+        cleaned = card.strip().upper().replace("10", "T")
+        if len(cleaned) != 2:
+            return None
+
+        rank = cleaned[0]
+        suit = cleaned[1].lower()
+        if rank not in "23456789TJQKA" or suit not in "cdhs":
+            return None
+        return f"{rank}{suit}"
+
+    @classmethod
+    def _merge_dead_cards(cls, *sources: list[str]) -> list[str]:
+        merged: list[str] = []
+        for source in sources:
+            for card in source:
+                normalized = cls._normalize_card(card)
+                if normalized is None:
+                    continue
+                if normalized not in merged:
+                    merged.append(normalized)
+        return merged
+
+    @staticmethod
     def _street_from_board(board_cards: list[str]) -> str:
         board_count = len(board_cards)
         if board_count >= 5:
@@ -57,9 +81,21 @@ class PokerHandWorkflow:
 
     def execute(self) -> str:
         snapshot = self.vision.read_table()
-        dead_cards = self.memory.get("dead_cards", [])
-        if not isinstance(dead_cards, list):
-            dead_cards = []
+        memory_dead_cards = self.memory.get("dead_cards", [])
+        if not isinstance(memory_dead_cards, list):
+            memory_dead_cards = []
+
+        snapshot_dead_cards = getattr(snapshot, "dead_cards", [])
+        if not isinstance(snapshot_dead_cards, list):
+            snapshot_dead_cards = []
+
+        dead_cards = self._merge_dead_cards(memory_dead_cards, snapshot_dead_cards)
+        visible_cards = {
+            *(self._normalize_card(card) for card in snapshot.hero_cards),
+            *(self._normalize_card(card) for card in snapshot.board_cards),
+        }
+        dead_cards = [card for card in dead_cards if card not in visible_cards]
+        self.memory.set("dead_cards", dead_cards)
 
         estimate = self.equity.estimate(snapshot.hero_cards, snapshot.board_cards, dead_cards=dead_cards)
         street = self._street_from_board(snapshot.board_cards)
@@ -81,6 +117,7 @@ class PokerHandWorkflow:
             {
                 "hero_cards": snapshot.hero_cards,
                 "board_cards": snapshot.board_cards,
+                "dead_cards": dead_cards,
                 "win_rate": estimate.win_rate,
                 "tie_rate": estimate.tie_rate,
                 "street": street,

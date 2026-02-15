@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import re
 from typing import Any
@@ -42,6 +42,7 @@ class TableSnapshot:
     board_cards: list[str]
     pot: float
     stack: float
+    dead_cards: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -134,6 +135,10 @@ class VisionTool:
             r"^(board|flop|turn|river|community|table)[_\-]?(card)?[_\-]?(.+)$",
             r"^(b|bc)[_\-]?(\d+)?[_\-]?(.+)$",
         ]
+        dead_patterns = [
+            r"^(dead|burn|muck|folded|gone)[_\-]?(card)?[_\-]?(.+)$",
+            r"^(d|dc)[_\-]?(\d+)?[_\-]?(.+)$",
+        ]
 
         for pattern in hero_patterns:
             match = re.match(pattern, lowered)
@@ -146,6 +151,12 @@ class VisionTool:
             if match is not None:
                 candidate = self._normalize_card_token(match.group(match.lastindex or 1))
                 return ("board", candidate, None)
+
+        for pattern in dead_patterns:
+            match = re.match(pattern, lowered)
+            if match is not None:
+                candidate = self._normalize_card_token(match.group(match.lastindex or 1))
+                return ("dead", candidate, None)
 
         if direct_card is not None:
             return ("generic_card", direct_card, None)
@@ -176,28 +187,31 @@ class VisionTool:
 
     @staticmethod
     def _fallback_snapshot() -> TableSnapshot:
-        return TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0)
+        return TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0, dead_cards=[])
 
     def _simulated_snapshot(self) -> TableSnapshot:
         scenarios: dict[str, TableSnapshot] = {
-            "wait": TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0),
+            "wait": TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0, dead_cards=[]),
             "fold": TableSnapshot(
                 hero_cards=["7c", "2d", "4h", "3s"],
                 board_cards=["Kc", "Qd", "9s"],
                 pot=45.0,
                 stack=180.0,
+                dead_cards=["Ah"],
             ),
             "call": TableSnapshot(
                 hero_cards=["As", "Kd", "Qh", "Js"],
                 board_cards=["9c", "7d", "2s"],
                 pot=40.0,
                 stack=220.0,
+                dead_cards=["Tc", "8h"],
             ),
             "raise": TableSnapshot(
                 hero_cards=["As", "Ah", "Ks", "Kh", "Qs", "Qh"],
                 board_cards=["Ad", "Kd", "Qc", "Jh"],
                 pot=20.0,
                 stack=600.0,
+                dead_cards=["2c", "2d", "2h"],
             ),
         }
 
@@ -229,6 +243,7 @@ class VisionTool:
 
         hero_cards: list[str] = []
         board_cards: list[str] = []
+        dead_cards: list[str] = []
         detected_pot = 0.0
         detected_stack = 0.0
 
@@ -255,6 +270,10 @@ class VisionTool:
 
             if category == "board" and card_token is not None:
                 board_cards.append(card_token)
+                continue
+
+            if category == "dead" and card_token is not None:
+                dead_cards.append(card_token)
                 continue
 
             if category == "pot" and numeric_value is not None:
@@ -292,8 +311,15 @@ class VisionTool:
 
         hero_cards = self._dedupe_cards(hero_cards, max_size=6)
         board_cards = self._dedupe_cards(board_cards, max_size=5)
+        dead_cards = self._dedupe_cards(dead_cards, max_size=20)
 
-        return TableSnapshot(hero_cards=hero_cards, board_cards=board_cards, pot=detected_pot, stack=detected_stack)
+        return TableSnapshot(
+            hero_cards=hero_cards,
+            board_cards=board_cards,
+            pot=detected_pot,
+            stack=detected_stack,
+            dead_cards=dead_cards,
+        )
 
     def read_table(self) -> TableSnapshot:
         if self.sim_scenario != "off":
