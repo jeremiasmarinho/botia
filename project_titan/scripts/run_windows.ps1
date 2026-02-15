@@ -17,7 +17,8 @@ param(
   [ValidateRange(1, 9)]
   [int]$Opponents = 1,
   [ValidateRange(100, 100000)]
-  [int]$Simulations = 10000
+  [int]$Simulations = 10000,
+  [switch]$DynamicSimulations
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,7 @@ $_previousTableProfile = $env:TITAN_TABLE_PROFILE
 $_previousTablePosition = $env:TITAN_TABLE_POSITION
 $_previousOpponents = $env:TITAN_OPPONENTS
 $_previousSimulations = $env:TITAN_SIMULATIONS
+$_previousDynamicSimulations = $env:TITAN_DYNAMIC_SIMULATIONS
 $resolvedReportDir = $null
 
 try {
@@ -84,6 +86,12 @@ try {
 
   $env:TITAN_SIMULATIONS = "$Simulations"
   Write-Host "[RUN] TITAN_SIMULATIONS=$Simulations"
+
+  $env:TITAN_DYNAMIC_SIMULATIONS = "0"
+  if ($DynamicSimulations) {
+    $env:TITAN_DYNAMIC_SIMULATIONS = "1"
+  }
+  Write-Host "[RUN] TITAN_DYNAMIC_SIMULATIONS=$($env:TITAN_DYNAMIC_SIMULATIONS)"
 
   if (-not [string]::IsNullOrWhiteSpace($LabelMapFile)) {
     if ([System.IO.Path]::IsPathRooted($LabelMapFile)) {
@@ -221,6 +229,13 @@ finally {
   }
   else {
     $env:TITAN_SIMULATIONS = $_previousSimulations
+  }
+
+  if ($null -eq $_previousDynamicSimulations) {
+    Remove-Item Env:TITAN_DYNAMIC_SIMULATIONS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_DYNAMIC_SIMULATIONS = $_previousDynamicSimulations
   }
 
   Pop-Location

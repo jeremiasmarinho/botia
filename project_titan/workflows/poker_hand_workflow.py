@@ -52,6 +52,27 @@ class PokerHandWorkflow:
         return min(max(int(raw_value), 100), 100_000)
 
     @staticmethod
+    def _dynamic_simulations_enabled() -> bool:
+        raw_value = os.getenv("TITAN_DYNAMIC_SIMULATIONS", "0").strip().lower()
+        return raw_value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _effective_simulations(base_simulations: int, street: str, opponents_count: int, dynamic_enabled: bool) -> int:
+        if not dynamic_enabled:
+            return base_simulations
+
+        street_multiplier: dict[str, float] = {
+            "preflop": 0.40,
+            "flop": 0.70,
+            "turn": 1.00,
+            "river": 1.25,
+        }
+        multiplier = street_multiplier.get(street, 1.0)
+        multiway_boost = 1.0 + min(max(opponents_count - 1, 0) * 0.08, 0.40)
+        effective = int(base_simulations * multiplier * multiway_boost)
+        return min(max(effective, 100), 100_000)
+
+    @staticmethod
     def _normalize_card(card: str) -> str | None:
         cleaned = card.strip().upper().replace("10", "T")
         if len(cleaned) != 2:
@@ -189,7 +210,14 @@ class PokerHandWorkflow:
         table_profile = self._table_profile()
         table_position = self._table_position()
         opponents_count = self._opponents_count()
-        simulations_count = self._simulations_count()
+        base_simulations = self._simulations_count()
+        dynamic_simulations = self._dynamic_simulations_enabled()
+        simulations_count = self._effective_simulations(
+            base_simulations=base_simulations,
+            street=street,
+            opponents_count=opponents_count,
+            dynamic_enabled=dynamic_simulations,
+        )
         estimate = self.equity.estimate(
             snapshot.hero_cards,
             snapshot.board_cards,
@@ -235,6 +263,8 @@ class PokerHandWorkflow:
                 "table_position": table_position,
                 "opponents": opponents_count,
                 "simulations": simulations_count,
+                "simulations_base": base_simulations,
+                "dynamic_simulations": dynamic_simulations,
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,
                 "decision": decision,
