@@ -1,5 +1,7 @@
 param(
-  [switch]$HealthOnly
+  [switch]$HealthOnly,
+  [ValidateSet("off", "wait", "fold", "call", "raise", "cycle")]
+  [string]$SimScenario = "off"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +32,14 @@ if (-not $pythonExe) {
 }
 
 Push-Location $projectRoot
+$_previousSimScenario = $env:TITAN_SIM_SCENARIO
+
 try {
+  if ($SimScenario -ne "off") {
+    $env:TITAN_SIM_SCENARIO = $SimScenario
+    Write-Host "[SIM] TITAN_SIM_SCENARIO=$SimScenario"
+  }
+
   Write-Host "[1/2] Running healthcheck with: $pythonExe"
   & $pythonExe -m orchestrator.healthcheck
 
@@ -47,5 +56,12 @@ try {
   & $pythonExe -m orchestrator.engine
 }
 finally {
+  if ($null -eq $_previousSimScenario) {
+    Remove-Item Env:TITAN_SIM_SCENARIO -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_SIM_SCENARIO = $_previousSimScenario
+  }
+
   Pop-Location
 }

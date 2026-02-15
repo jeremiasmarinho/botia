@@ -71,6 +71,19 @@ Exemplo (PowerShell):
 
 Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código `0`.
 
+## Modo simulado (sem YOLO, para teste rápido)
+
+Para ver decisões variando no Windows sem visão real, use:
+
+- `./scripts/run_windows.ps1 -SimScenario cycle`
+
+Também é possível forçar um cenário específico:
+
+- `./scripts/run_windows.ps1 -HealthOnly -SimScenario wait`
+- `./scripts/run_windows.ps1 -HealthOnly -SimScenario fold`
+- `./scripts/run_windows.ps1 -HealthOnly -SimScenario call`
+- `./scripts/run_windows.ps1 -HealthOnly -SimScenario raise`
+
 ## APK Android (PoC)
 
 - Estrutura mobile pronta em `mobile/`.

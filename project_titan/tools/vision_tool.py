@@ -57,6 +57,8 @@ class VisionTool:
         self.model_path = model_path or os.getenv("TITAN_YOLO_MODEL", "")
         self.monitor = monitor
         self.debug_labels = os.getenv("TITAN_VISION_DEBUG_LABELS", "0") == "1"
+        self.sim_scenario = os.getenv("TITAN_SIM_SCENARIO", "off").strip().lower()
+        self._sim_index = 0
         self._unknown_labels: set[str] = set()
         self._model: Any | None = None
         self._load_error: str | None = None
@@ -176,6 +178,37 @@ class VisionTool:
     def _fallback_snapshot() -> TableSnapshot:
         return TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0)
 
+    def _simulated_snapshot(self) -> TableSnapshot:
+        scenarios: dict[str, TableSnapshot] = {
+            "wait": TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0),
+            "fold": TableSnapshot(
+                hero_cards=["7c", "2d", "4h", "3s"],
+                board_cards=["Kc", "Qd", "9s"],
+                pot=45.0,
+                stack=180.0,
+            ),
+            "call": TableSnapshot(
+                hero_cards=["As", "Kd", "Qh", "Js"],
+                board_cards=["9c", "7d", "2s"],
+                pot=40.0,
+                stack=220.0,
+            ),
+            "raise": TableSnapshot(
+                hero_cards=["As", "Ah", "Ks", "Kh", "Qs", "Qh"],
+                board_cards=["Ad", "Kd", "Qc", "Jh"],
+                pot=20.0,
+                stack=600.0,
+            ),
+        }
+
+        if self.sim_scenario == "cycle":
+            order = ["wait", "fold", "call", "raise"]
+            scenario_name = order[self._sim_index % len(order)]
+            self._sim_index += 1
+            return scenarios[scenario_name]
+
+        return scenarios.get(self.sim_scenario, self._fallback_snapshot())
+
     def _capture_frame(self) -> Any | None:
         try:
             import mss
@@ -263,6 +296,9 @@ class VisionTool:
         return TableSnapshot(hero_cards=hero_cards, board_cards=board_cards, pot=detected_pot, stack=detected_stack)
 
     def read_table(self) -> TableSnapshot:
+        if self.sim_scenario != "off":
+            return self._simulated_snapshot()
+
         if not self.model_path:
             return self._fallback_snapshot()
 
