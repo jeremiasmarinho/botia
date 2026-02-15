@@ -46,6 +46,8 @@ Se `TITAN_YOLO_MODEL` não for definido, o sistema continua em modo stub (snapsh
 - Card genérico: `Ah`, `card_Ah`, `10h` (normaliza para `Th`)
 - Formato por palavras: `ace_hearts`, `ten_spades`, `queen_diamonds`
 - Pot/stack numérico no label: `pot_23.5`, `stack_120.0`, `hero_stack_88`
+- Oponente atual: `opponent_villain42`, `opp_7`, `villain_rega`
+- Showdown para auditor RNG: `showdown_villain42_eq_37_won`, `sd_rega_0.41_lost`, `allin_v7_62p_win`
 
 Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela posição vertical da detecção.
 
@@ -64,6 +66,12 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_OPPONENTS`: número de vilões para equity Monte Carlo (`1` a `9`)
 - `TITAN_SIMULATIONS`: iterações Monte Carlo por decisão (`100` a `100000`)
 - `TITAN_DYNAMIC_SIMULATIONS`: ajusta automaticamente simulações por street (`0`/`1`)
+- `TITAN_RNG_EVASION`: ativa protocolo de evasão contra `SUPER_USER` (`0`/`1`, padrão `1`)
+- `TITAN_CURRENT_OPPONENT`: id do vilão atual para validação de evasão
+- `TITAN_ZMQ_BIND`: bind do servidor HiveBrain (ex: `tcp://0.0.0.0:5555`)
+- `TITAN_ZMQ_SERVER`: endpoint para agentes cliente (ex: `tcp://127.0.0.1:5555`)
+- `TITAN_AGENT_ID`: id do agente ZMQ (ex: `01`)
+- `TITAN_TABLE_ID`: id da mesa para coordenação de squad
 
 Exemplo (PowerShell):
 
@@ -93,6 +101,18 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 
 A decisão considera `win_rate`, `tie_rate`, `pot_odds` e qualidade da informação observada na mesa.
 
+### RNG Watchdog + Evasão
+
+O workflow agora aceita eventos de showdown em `memory["showdown_events"]`, com itens no formato:
+
+- `{"opponent_id":"villain_42", "equity":0.37, "won":true}`
+
+Esses eventos alimentam o `RngTool`/`RngAuditor`, que calcula Z-Score por vilão e mantém `memory["rng_super_users"]`.
+
+O estado do auditor RNG agora é persistido em memória compartilhada (`RedisMemory`) na chave `rng_audit_state` (ou `TITAN_RNG_STATE_KEY`), preservando histórico entre reinícios do processo.
+
+Se `TITAN_RNG_EVASION=1` e `TITAN_CURRENT_OPPONENT` estiver marcado como `SUPER_USER`, o workflow força `fold` (quando não estiver em estado `wait`).
+
 ## Modo simulado (sem YOLO, para teste rápido)
 
 Para ver decisões variando no Windows sem visão real, use:
@@ -109,6 +129,8 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition co -Opponents 4`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -DynamicSimulations`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -ProfileSweep`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -PositionSweep`
 
 Também é possível forçar um cenário específico:
 
@@ -131,11 +153,35 @@ Para balancear precisão vs velocidade do equity, use `-Simulations` (`100..1000
 
 Para ajuste automático por street (preflop/flop/turn/river), use `-DynamicSimulations`.
 
+Para benchmark rápido A/B/C por perfil (`tight`, `normal`, `aggressive`), use `-ProfileSweep`.
+
+Para benchmark rápido por posição (`utg`, `mp`, `co`, `btn`, `sb`, `bb`), use `-PositionSweep`.
+
+Use apenas um sweep por execução: `-ProfileSweep` ou `-PositionSweep`.
+
+Os modos de sweep agora exibem ranking automático (`Best`/`Worst`) por `score` composto (`average_win_rate` + bônus de `raises` - penalidade de `folds`), com desempate por `average_win_rate`, `raises` e `folds`.
+
+Além do output no terminal, cada sweep salva um arquivo consolidado `sweep_summary_profile_*.json` ou `sweep_summary_position_*.json` no `ReportDir`.
+
+Para comparar a última execução com a anterior, use `-CompareSweepHistory` (e opcionalmente `-HistoryDepth`, padrão `5`).
+
+Para consultar histórico sem rodar o engine, use `-OnlySweepHistory -SweepHistoryMode profile|position`.
+
+Para salvar o comparativo em JSON, adicione `-SaveHistoryCompare` (gera `history_compare_profile_*.json` ou `history_compare_position_*.json`).
+
+Para um dashboard rápido dos últimos sweeps (`profile` + `position`), use `-SweepDashboard` (usa `-HistoryDepth` como quantidade por modo).
+
+Exemplo: `./scripts/run_windows.ps1 -OnlySweepHistory -SweepHistoryMode position -HistoryDepth 5 -ReportDir reports`.
+
 Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
 
 - `[Orchestrator] run_report={...}`
 
-Campos atuais: `ticks`, `outcomes`, `average_win_rate`, `action_counts`, `duration_seconds`.
+Campos atuais: `ticks`, `outcomes`, `average_win_rate`, `action_counts`, `simulation_usage`, `rng_watchdog`, `duration_seconds`.
+
+`simulation_usage` inclui: `count`, `average`, `min`, `max`, `dynamic_enabled_decisions`.
+
+`rng_watchdog` inclui: `players_audited`, `players_flagged`, `flagged_opponents`, `top_zscores`.
 
 Para persistir em arquivo `.json`, informe `-ReportDir` no script Windows (ou defina `TITAN_REPORT_DIR`).
 

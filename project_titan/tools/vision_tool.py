@@ -44,6 +44,8 @@ class TableSnapshot:
     pot: float
     stack: float
     dead_cards: list[str] = field(default_factory=list)
+    current_opponent: str = ""
+    showdown_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -220,6 +222,65 @@ class VisionTool:
         return (None, None, None)
 
     @staticmethod
+    def _normalize_opponent_id(value: str) -> str:
+        normalized = re.sub(r"[^a-zA-Z0-9_]", "", value.strip().replace("-", "_")).lower()
+        return normalized
+
+    def _parse_opponent_label(self, label: str) -> str | None:
+        normalized = self._apply_alias(label).strip().lower()
+
+        patterns = [
+            r"^(opponent|opp|villain|vilao)[_\-]?([a-zA-Z0-9_]+)$",
+            r"^(opponent|opp|villain|vilao)[_\-]?(id)[_\-]?([a-zA-Z0-9_]+)$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, normalized)
+            if match is None:
+                continue
+            candidate = match.group(match.lastindex or 1)
+            opponent_id = self._normalize_opponent_id(candidate)
+            if opponent_id:
+                return opponent_id
+        return None
+
+    @staticmethod
+    def _normalize_equity(value: float, has_percent_suffix: bool) -> float:
+        equity = float(value)
+        if has_percent_suffix or equity > 1.0:
+            equity = equity / 100.0
+        return min(max(equity, 0.0), 1.0)
+
+    def _parse_showdown_label(self, label: str) -> dict[str, Any] | None:
+        normalized = self._apply_alias(label).strip().lower()
+        patterns = [
+            r"^(showdown|sd|allin)[_\-]([a-zA-Z0-9_]+)[_\-](?:eq|equity)[_\-]?([0-9]+(?:\.[0-9]+)?)(p)?[_\-](won|win|lost|lose)$",
+            r"^(showdown|sd|allin)[_\-]([a-zA-Z0-9_]+)[_\-]([0-9]+(?:\.[0-9]+)?)(p)?[_\-](won|win|lost|lose)$",
+        ]
+
+        for pattern in patterns:
+            match = re.match(pattern, normalized)
+            if match is None:
+                continue
+
+            opponent_id = self._normalize_opponent_id(match.group(2))
+            if not opponent_id:
+                continue
+
+            raw_equity = float(match.group(3))
+            has_percent_suffix = match.group(4) == "p"
+            equity = self._normalize_equity(raw_equity, has_percent_suffix)
+            outcome_token = match.group(5)
+            won = outcome_token in {"won", "win"}
+
+            return {
+                "opponent_id": opponent_id,
+                "equity": round(equity, 4),
+                "won": won,
+            }
+
+        return None
+
+    @staticmethod
     def _dedupe_cards(cards: list[str], max_size: int) -> list[str]:
         deduped: list[str] = []
         for card in cards:
@@ -231,7 +292,15 @@ class VisionTool:
 
     @staticmethod
     def _fallback_snapshot() -> TableSnapshot:
-        return TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0, dead_cards=[])
+        return TableSnapshot(
+            hero_cards=[],
+            board_cards=[],
+            pot=0.0,
+            stack=0.0,
+            dead_cards=[],
+            current_opponent="",
+            showdown_events=[],
+        )
 
     def _simulated_snapshot(self) -> TableSnapshot:
         scenarios: dict[str, TableSnapshot] = {
@@ -288,6 +357,8 @@ class VisionTool:
         hero_cards: list[str] = []
         board_cards: list[str] = []
         dead_cards: list[str] = []
+        showdown_events: list[dict[str, Any]] = []
+        current_opponent = ""
         detected_pot = 0.0
         detected_stack = 0.0
 
@@ -306,6 +377,16 @@ class VisionTool:
         generic_cards: list[DetectionItem] = []
 
         for item in sorted(items, key=lambda item: item.center_x):
+            showdown_event = self._parse_showdown_label(item.label)
+            if showdown_event is not None:
+                showdown_events.append(showdown_event)
+                continue
+
+            opponent_id = self._parse_opponent_label(item.label)
+            if opponent_id:
+                current_opponent = opponent_id
+                continue
+
             category, card_token, numeric_value = self._parse_label(item.label)
 
             if category == "hero" and card_token is not None:
@@ -363,6 +444,8 @@ class VisionTool:
             pot=detected_pot,
             stack=detected_stack,
             dead_cards=dead_cards,
+            current_opponent=current_opponent,
+            showdown_events=showdown_events,
         )
 
     def read_table(self) -> TableSnapshot:

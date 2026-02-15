@@ -12,6 +12,7 @@ from workflows.poker_hand_workflow import PokerHandWorkflow
 from tools.vision_tool import VisionTool
 from tools.equity_tool import EquityTool
 from tools.action_tool import ActionTool
+from tools.rng_tool import RngTool
 from agents.zombie_agent import ZombieAgent
 from utils.config import ServerConfig, VisionRuntimeConfig
 
@@ -39,7 +40,8 @@ class Orchestrator:
         )
         equity_tool = EquityTool()
         action_tool = ActionTool()
-        workflow = PokerHandWorkflow(vision_tool, equity_tool, action_tool, self.registry.memory)
+        rng_tool = RngTool(storage=self.registry.memory)
+        workflow = PokerHandWorkflow(vision_tool, equity_tool, action_tool, self.registry.memory, rng_tool)
         agent = ZombieAgent(workflow)
 
         print(f"[Orchestrator] memory backend={self.registry.memory.backend}")
@@ -47,6 +49,7 @@ class Orchestrator:
         self.registry.register_tool("vision", vision_tool)
         self.registry.register_tool("equity", equity_tool)
         self.registry.register_tool("action", action_tool)
+        self.registry.register_tool("rng", rng_tool)
         self.registry.register_workflow("poker_hand", workflow)
         self.registry.register_agent("zombie_01", agent)
 
@@ -72,6 +75,28 @@ class Orchestrator:
         return action, win_rate
 
     @staticmethod
+    def _extract_simulations_from_decision(last_decision: Any) -> tuple[int | None, bool | None]:
+        if not isinstance(last_decision, dict):
+            return None, None
+
+        simulations = last_decision.get("simulations")
+        dynamic_simulations = last_decision.get("dynamic_simulations")
+
+        parsed_simulations: int | None = None
+        if isinstance(simulations, int):
+            parsed_simulations = simulations
+        elif isinstance(simulations, str) and simulations.strip().isdigit():
+            parsed_simulations = int(simulations.strip())
+
+        parsed_dynamic: bool | None = None
+        if isinstance(dynamic_simulations, bool):
+            parsed_dynamic = dynamic_simulations
+        elif isinstance(dynamic_simulations, str):
+            parsed_dynamic = dynamic_simulations.strip().lower() in {"1", "true", "yes", "on"}
+
+        return parsed_simulations, parsed_dynamic
+
+    @staticmethod
     def _write_report_file(report: dict[str, Any]) -> str | None:
         report_dir = os.getenv("TITAN_REPORT_DIR", "").strip()
         if not report_dir:
@@ -80,7 +105,9 @@ class Orchestrator:
         try:
             os.makedirs(report_dir, exist_ok=True)
             timestamp = time.strftime("%Y%m%d_%H%M%S")
+            millis = int((time.time() % 1) * 1000)
             filename = f"run_report_{timestamp}.json"
+            filename = f"run_report_{timestamp}_{millis:03d}.json"
             file_path = os.path.join(report_dir, filename)
             with open(file_path, "w", encoding="utf-8") as report_file:
                 json.dump(report, report_file, ensure_ascii=False, indent=2)
@@ -98,6 +125,11 @@ class Orchestrator:
         action_counts: dict[str, int] = {}
         win_rate_sum = 0.0
         win_rate_count = 0
+        simulations_sum = 0
+        simulations_count = 0
+        simulations_min: int | None = None
+        simulations_max: int | None = None
+        dynamic_simulation_decisions = 0
         started_at = time.perf_counter()
 
         try:
@@ -116,6 +148,21 @@ class Orchestrator:
                             win_rate_sum += win_rate
                             win_rate_count += 1
 
+                        last_decision = self.registry.memory.get("last_decision", {})
+                        simulations_value, dynamic_enabled = self._extract_simulations_from_decision(last_decision)
+                        if simulations_value is not None and simulations_value > 0:
+                            simulations_sum += simulations_value
+                            simulations_count += 1
+                            simulations_min = (
+                                simulations_value if simulations_min is None else min(simulations_min, simulations_value)
+                            )
+                            simulations_max = (
+                                simulations_value if simulations_max is None else max(simulations_max, simulations_value)
+                            )
+
+                        if dynamic_enabled is True:
+                            dynamic_simulation_decisions += 1
+
                 tick_count += 1
                 if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
                     print(f"[Orchestrator] reached max ticks={self.config.max_ticks}. stopping loop")
@@ -131,11 +178,44 @@ class Orchestrator:
             if win_rate_count > 0:
                 average_win_rate = round(win_rate_sum / win_rate_count, 4)
 
+            simulation_usage: dict[str, Any] = {
+                "count": simulations_count,
+                "average": None,
+                "min": simulations_min,
+                "max": simulations_max,
+                "dynamic_enabled_decisions": dynamic_simulation_decisions,
+            }
+            if simulations_count > 0:
+                simulation_usage["average"] = round(simulations_sum / simulations_count, 2)
+
+            rng_watchdog: dict[str, Any] = {
+                "players_audited": 0,
+                "players_flagged": 0,
+                "flagged_opponents": [],
+                "top_zscores": [],
+            }
+            rng_tool = self.registry.tools.get("rng")
+            if rng_tool is not None and hasattr(rng_tool, "telemetry_summary"):
+                try:
+                    rng_summary = rng_tool.telemetry_summary(top_k=3)
+                    if isinstance(rng_summary, dict):
+                        rng_watchdog = rng_summary
+                except Exception as error:
+                    rng_watchdog = {
+                        "players_audited": 0,
+                        "players_flagged": 0,
+                        "flagged_opponents": [],
+                        "top_zscores": [],
+                        "error": str(error),
+                    }
+
             report = {
                 "ticks": tick_count,
                 "outcomes": total_outcomes,
                 "average_win_rate": average_win_rate,
                 "action_counts": action_counts,
+                "simulation_usage": simulation_usage,
+                "rng_watchdog": rng_watchdog,
                 "duration_seconds": round(duration_seconds, 3),
             }
             print(f"[Orchestrator] run_report={json.dumps(report, ensure_ascii=False)}")

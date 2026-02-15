@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
 
 @dataclass(slots=True)
 class ServerConfig:
-    zmq_bind: str = "tcp://0.0.0.0:5555"
-    redis_url: str = "redis://127.0.0.1:6379/0"
+    zmq_bind: str = field(default_factory=lambda: os.getenv("TITAN_ZMQ_BIND", "tcp://0.0.0.0:5555"))
+    redis_url: str = field(default_factory=lambda: os.getenv("TITAN_REDIS_URL", "redis://127.0.0.1:6379/0"))
 
 
 @dataclass(slots=True)
 class AgentRuntimeConfig:
-    agent_id: str = "01"
-    zmq_server: str = "tcp://127.0.0.1:5555"
+    agent_id: str = field(default_factory=lambda: os.getenv("TITAN_AGENT_ID", "01"))
+    zmq_server: str = field(default_factory=lambda: os.getenv("TITAN_ZMQ_SERVER", "tcp://127.0.0.1:5555"))
+    table_id: str = field(default_factory=lambda: os.getenv("TITAN_TABLE_ID", "table_default"))
+    heartbeat_seconds: float = field(default_factory=lambda: float(os.getenv("TITAN_AGENT_HEARTBEAT", "1.0")))
+    timeout_ms: int = field(default_factory=lambda: int(os.getenv("TITAN_AGENT_TIMEOUT_MS", "1500")))
 
 
 @dataclass(slots=True)

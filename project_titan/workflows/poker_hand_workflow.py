@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from tools.action_tool import ActionTool
 from tools.equity_tool import EquityTool
+from tools.rng_tool import RngTool
 from tools.vision_tool import VisionTool
 
 
@@ -21,6 +22,7 @@ class PokerHandWorkflow:
     equity: EquityTool
     action: ActionTool
     memory: SupportsMemory
+    rng: RngTool
 
     @staticmethod
     def _table_profile() -> str:
@@ -55,6 +57,41 @@ class PokerHandWorkflow:
     def _dynamic_simulations_enabled() -> bool:
         raw_value = os.getenv("TITAN_DYNAMIC_SIMULATIONS", "0").strip().lower()
         return raw_value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _rng_evasion_enabled() -> bool:
+        raw_value = os.getenv("TITAN_RNG_EVASION", "1").strip().lower()
+        return raw_value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _current_opponent(memory: SupportsMemory) -> str:
+        memory_value = memory.get("current_opponent", "")
+        if isinstance(memory_value, str) and memory_value.strip():
+            return memory_value.strip()
+        return os.getenv("TITAN_CURRENT_OPPONENT", "").strip()
+
+    @staticmethod
+    def _extract_showdown_events(memory: SupportsMemory) -> list[dict[str, Any]]:
+        events = memory.get("showdown_events", [])
+        if not isinstance(events, list):
+            return []
+
+        normalized_events: list[dict[str, Any]] = []
+        for event in events:
+            if isinstance(event, dict):
+                normalized_events.append(event)
+        return normalized_events
+
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return default
+        return default
 
     @staticmethod
     def _effective_simulations(base_simulations: int, street: str, opponents_count: int, dynamic_enabled: bool) -> int:
@@ -190,6 +227,24 @@ class PokerHandWorkflow:
 
     def execute(self) -> str:
         snapshot = self.vision.read_table()
+        snapshot_events = getattr(snapshot, "showdown_events", [])
+        if not isinstance(snapshot_events, list):
+            snapshot_events = []
+
+        memory_events = self._extract_showdown_events(self.memory)
+        rng_events = [event for event in snapshot_events if isinstance(event, dict)] + memory_events
+        for event in rng_events:
+            self.rng.ingest_showdown(event)
+        if memory_events:
+            self.memory.set("showdown_events", [])
+
+        snapshot_opponent = getattr(snapshot, "current_opponent", "")
+        if isinstance(snapshot_opponent, str) and snapshot_opponent.strip():
+            self.memory.set("current_opponent", snapshot_opponent.strip())
+
+        flagged_opponents = self.rng.flagged_opponents()
+        self.memory.set("rng_super_users", flagged_opponents)
+
         memory_dead_cards = self.memory.get("dead_cards", [])
         if not isinstance(memory_dead_cards, list):
             memory_dead_cards = []
@@ -246,6 +301,17 @@ class PokerHandWorkflow:
                 opponents_count=opponents_count,
             )
 
+        current_opponent = (
+            snapshot_opponent.strip()
+            if isinstance(snapshot_opponent, str) and snapshot_opponent.strip()
+            else self._current_opponent(self.memory)
+        )
+        rng_alert = None
+        if current_opponent:
+            rng_alert = self.rng.should_evade(current_opponent)
+            if self._rng_evasion_enabled() and rng_alert.should_evade and decision != "wait":
+                decision = "fold"
+
         result = self.action.act(decision)
         self.memory.set(
             "last_decision",
@@ -268,6 +334,14 @@ class PokerHandWorkflow:
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,
                 "decision": decision,
+                "rng": {
+                    "current_opponent": current_opponent,
+                    "flagged_opponents": flagged_opponents,
+                    "evasion_enabled": self._rng_evasion_enabled(),
+                    "evading": bool(rng_alert.should_evade) if rng_alert is not None else False,
+                    "z_score": round(self._to_float(getattr(rng_alert, "z_score", 0.0)), 4),
+                    "sample_count": int(getattr(rng_alert, "sample_count", 0)) if rng_alert is not None else 0,
+                },
             },
         )
         return f"win_rate={estimate.win_rate:.2f} {result}"
