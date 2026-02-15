@@ -45,6 +45,13 @@ class PokerHandWorkflow:
         return min(max(int(raw_value), 1), 9)
 
     @staticmethod
+    def _simulations_count() -> int:
+        raw_value = os.getenv("TITAN_SIMULATIONS", "10000").strip()
+        if not raw_value.isdigit():
+            return 10_000
+        return min(max(int(raw_value), 100), 100_000)
+
+    @staticmethod
     def _normalize_card(card: str) -> str | None:
         cleaned = card.strip().upper().replace("10", "T")
         if len(cleaned) != 2:
@@ -182,11 +189,13 @@ class PokerHandWorkflow:
         table_profile = self._table_profile()
         table_position = self._table_position()
         opponents_count = self._opponents_count()
+        simulations_count = self._simulations_count()
         estimate = self.equity.estimate(
             snapshot.hero_cards,
             snapshot.board_cards,
             dead_cards=dead_cards,
             opponents=opponents_count,
+            simulations=simulations_count,
         )
         info_quality = self._information_quality(snapshot.hero_cards, snapshot.board_cards, dead_cards)
         score = estimate.win_rate + (estimate.tie_rate * 0.5)
@@ -225,6 +234,7 @@ class PokerHandWorkflow:
                 "table_profile": table_profile,
                 "table_position": table_position,
                 "opponents": opponents_count,
+                "simulations": simulations_count,
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,
                 "decision": decision,

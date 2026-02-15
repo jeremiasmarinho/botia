@@ -21,6 +21,13 @@ class EquityTool:
         board_cards: list[str],
         dead_cards: list[str],
         opponents: int = 1,
+        simulations: int = 10_000,
     ) -> EquityEstimate:
-        result = self.engine.estimate_equity(hero_cards, board_cards, dead_cards, opponents=opponents)
+        result = self.engine.estimate_equity(
+            hero_cards,
+            board_cards,
+            dead_cards,
+            simulations=simulations,
+            opponents=opponents,
+        )
         return EquityEstimate(win_rate=result.win_rate, tie_rate=result.tie_rate)

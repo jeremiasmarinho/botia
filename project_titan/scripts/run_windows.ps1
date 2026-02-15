@@ -15,7 +15,9 @@ param(
   [ValidateSet("utg", "mp", "co", "btn", "sb", "bb")]
   [string]$TablePosition = "mp",
   [ValidateRange(1, 9)]
-  [int]$Opponents = 1
+  [int]$Opponents = 1,
+  [ValidateRange(100, 100000)]
+  [int]$Simulations = 10000
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +56,7 @@ $_previousLabelMapFile = $env:TITAN_VISION_LABEL_MAP_FILE
 $_previousTableProfile = $env:TITAN_TABLE_PROFILE
 $_previousTablePosition = $env:TITAN_TABLE_POSITION
 $_previousOpponents = $env:TITAN_OPPONENTS
+$_previousSimulations = $env:TITAN_SIMULATIONS
 $resolvedReportDir = $null
 
 try {
@@ -78,6 +81,9 @@ try {
 
   $env:TITAN_OPPONENTS = "$Opponents"
   Write-Host "[RUN] TITAN_OPPONENTS=$Opponents"
+
+  $env:TITAN_SIMULATIONS = "$Simulations"
+  Write-Host "[RUN] TITAN_SIMULATIONS=$Simulations"
 
   if (-not [string]::IsNullOrWhiteSpace($LabelMapFile)) {
     if ([System.IO.Path]::IsPathRooted($LabelMapFile)) {
@@ -208,6 +214,13 @@ finally {
   }
   else {
     $env:TITAN_OPPONENTS = $_previousOpponents
+  }
+
+  if ($null -eq $_previousSimulations) {
+    Remove-Item Env:TITAN_SIMULATIONS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_SIMULATIONS = $_previousSimulations
   }
 
   Pop-Location

@@ -62,6 +62,7 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_TABLE_PROFILE`: `tight`, `normal` ou `aggressive`
 - `TITAN_TABLE_POSITION`: `utg`, `mp`, `co`, `btn`, `sb`, `bb`
 - `TITAN_OPPONENTS`: número de vilões para equity Monte Carlo (`1` a `9`)
+- `TITAN_SIMULATIONS`: iterações Monte Carlo por decisão (`100` a `100000`)
 
 Exemplo (PowerShell):
 
@@ -105,6 +106,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile aggressive`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition btn`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition co -Opponents 4`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000`
 
 Também é possível forçar um cenário específico:
 
@@ -122,6 +124,8 @@ Para calibrar agressividade da política, use `-TableProfile` (`tight|normal|agg
 Para calibrar por posição de mesa, use `-TablePosition` (`utg|mp|co|btn|sb|bb`).
 
 Para calibrar por pote multiway, use `-Opponents` (`1..9`).
+
+Para balancear precisão vs velocidade do equity, use `-Simulations` (`100..100000`).
 
 Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
 
