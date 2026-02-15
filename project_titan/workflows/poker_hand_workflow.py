@@ -30,6 +30,14 @@ class PokerHandWorkflow:
         return "normal"
 
     @staticmethod
+    def _table_position() -> str:
+        position = os.getenv("TITAN_TABLE_POSITION", "mp").strip().lower()
+        valid_positions = {"utg", "mp", "co", "btn", "sb", "bb"}
+        if position in valid_positions:
+            return position
+        return "mp"
+
+    @staticmethod
     def _normalize_card(card: str) -> str | None:
         cleaned = card.strip().upper().replace("10", "T")
         if len(cleaned) != 2:
@@ -80,6 +88,7 @@ class PokerHandWorkflow:
         stack: float,
         information_quality: float,
         table_profile: str,
+        table_position: str,
     ) -> tuple[str, float, float]:
         base_thresholds: dict[str, tuple[float, float, float]] = {
             "preflop": (0.40, 0.62, 0.75),
@@ -101,6 +110,19 @@ class PokerHandWorkflow:
         call_threshold += call_offset
         raise_small_threshold += raise_small_offset
         raise_big_threshold += raise_big_offset
+
+        position_offsets: dict[str, tuple[float, float, float]] = {
+            "utg": (0.03, 0.04, 0.04),
+            "mp": (0.01, 0.01, 0.01),
+            "co": (-0.01, -0.02, -0.02),
+            "btn": (-0.03, -0.04, -0.04),
+            "sb": (0.02, 0.02, 0.02),
+            "bb": (0.0, 0.0, 0.0),
+        }
+        pos_call_offset, pos_raise_small_offset, pos_raise_big_offset = position_offsets.get(table_position, (0.0, 0.0, 0.0))
+        call_threshold += pos_call_offset
+        raise_small_threshold += pos_raise_small_offset
+        raise_big_threshold += pos_raise_big_offset
 
         call_threshold += min(pot_odds * 0.35, 0.08)
         raise_small_threshold += min(pot_odds * 0.15, 0.05)
@@ -146,6 +168,7 @@ class PokerHandWorkflow:
         estimate = self.equity.estimate(snapshot.hero_cards, snapshot.board_cards, dead_cards=dead_cards)
         street = self._street_from_board(snapshot.board_cards)
         table_profile = self._table_profile()
+        table_position = self._table_position()
         info_quality = self._information_quality(snapshot.hero_cards, snapshot.board_cards, dead_cards)
         score = estimate.win_rate + (estimate.tie_rate * 0.5)
         pot_odds = self._pot_odds(snapshot.pot, snapshot.stack)
@@ -163,6 +186,7 @@ class PokerHandWorkflow:
                 stack=snapshot.stack,
                 information_quality=info_quality,
                 table_profile=table_profile,
+                table_position=table_position,
             )
 
         result = self.action.act(decision)
@@ -179,6 +203,7 @@ class PokerHandWorkflow:
                 "information_quality": round(info_quality, 4),
                 "street": street,
                 "table_profile": table_profile,
+                "table_position": table_position,
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,
                 "decision": decision,
