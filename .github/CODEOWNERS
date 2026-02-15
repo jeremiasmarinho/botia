@@ -1,0 +1,17 @@
+# Default owner
+
+- @jeremiasmarinho
+
+# CI and governance
+
+/.github/workflows/ @jeremiasmarinho
+/.github/PULL_REQUEST_TEMPLATE.md @jeremiasmarinho
+/.github/CODEOWNERS @jeremiasmarinho
+
+# Core Project Titan decision/runtime paths
+
+/project_titan/scripts/ @jeremiasmarinho
+/project_titan/workflows/ @jeremiasmarinho
+/project_titan/orchestrator/ @jeremiasmarinho
+/project_titan/tools/ @jeremiasmarinho
+/project_titan/README.md @jeremiasmarinho

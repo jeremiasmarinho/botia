@@ -1,0 +1,55 @@
+name: Project Titan Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "project_titan/**"
+      - ".github/workflows/project_titan_smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "project_titan/**"
+      - ".github/workflows/project_titan_smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: project_titan
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: project_titan/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run smoke_all
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\smoke_all.ps1 -ReportDir reports
+
+      - name: Build CI debug bundle on failure
+        if: failure()
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\collect_ci_debug.ps1 -ReportDir reports -OutputDir reports
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-titan-reports
+          path: project_titan/reports/
+          if-no-files-found: ignore

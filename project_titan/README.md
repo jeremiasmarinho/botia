@@ -47,7 +47,11 @@ Se `TITAN_YOLO_MODEL` não for definido, o sistema continua em modo stub (snapsh
 - Formato por palavras: `ace_hearts`, `ten_spades`, `queen_diamonds`
 - Pot/stack numérico no label: `pot_23.5`, `stack_120.0`, `hero_stack_88`
 - Oponente atual: `opponent_villain42`, `opp_7`, `villain_rega`
+- Jogadores ativos: `active_players_6`, `player_count_4`, `players_active_3`, `seats_5`
+- Botões de ação: `btn_fold`, `btn_call`, `btn_raise`, `btn_allin`, `action_call`, `action_raise`, `button_fold`
 - Showdown para auditor RNG: `showdown_villain42_eq_37_won`, `sd_rega_0.41_lost`, `allin_v7_62p_win`
+
+No perfil `TITAN_VISION_LABEL_PROFILE=dataset_v1`, o parser também cobre variantes de dataset para dead cards (`burned`, `mucked`, `discarded`, `folded`) e ordens diferentes de token (ex: `burn_card_1_7c`, `card_burn_7c`).
 
 Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela posição vertical da detecção.
 
@@ -59,6 +63,11 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_MONITOR_WIDTH`
 - `TITAN_MONITOR_HEIGHT`
 - `TITAN_VISION_DEBUG_LABELS=1`: imprime labels desconhecidos no terminal
+- `TITAN_VISION_LABEL_PROFILE`: `generic` (padrão) ou `dataset_v1` para parser específico de dataset
+- `TITAN_VISION_WAIT_STATE_CHANGE`: `0|1` ativa polling de mudança de estado no VisionTool
+- `TITAN_VISION_CHANGE_TIMEOUT`: timeout em segundos para aguardar mudança (`1.0` padrão)
+- `TITAN_VISION_POLL_FPS`: frequência de polling para captura contínua (`30` padrão)
+- `TITAN_VISION_WAIT_MY_TURN`: quando `1`, só retorna ao detectar mudança com `is_my_turn=true`
 - `TITAN_VISION_LABEL_MAP_FILE`: caminho de JSON com aliases de labels do dataset
 - `TITAN_VISION_LABEL_MAP_JSON`: JSON inline com aliases de labels
 - `TITAN_TABLE_PROFILE`: `tight`, `normal` ou `aggressive`
@@ -72,6 +81,42 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_ZMQ_SERVER`: endpoint para agentes cliente (ex: `tcp://127.0.0.1:5555`)
 - `TITAN_AGENT_ID`: id do agente ZMQ (ex: `01`)
 - `TITAN_TABLE_ID`: id da mesa para coordenação de squad
+- `TITAN_ACTIVE_PLAYERS`: número de jogadores ativos na mão (usado para obfuscação heads-up no HiveBrain)
+- `TITAN_AGENT_MAX_CYCLES`: limita ciclos do `agent/poker_agent.py` (útil para teste/CI)
+- `TITAN_ACTION_CALIBRATION_CACHE`: `0|1` ativa cache de calibração de botões por mesa (`1` padrão)
+- `TITAN_ACTION_CALIBRATION_FILE`: arquivo JSON para persistir cache de calibração (`reports/action_calibration_cache.json` padrão)
+- `TITAN_ACTION_CALIBRATION_SESSION`: escopo lógico de sessão para separar perfis no mesmo `table_id` (`default` padrão)
+- `TITAN_ACTION_CALIBRATION_MAX_SCOPES`: máximo de scopes (`table_id + session`) mantidos no arquivo (`50` padrão)
+- `TITAN_ACTION_SMOOTHING`: `0|1` ativa suavização temporal anti-jitter das coordenadas (`1` padrão)
+- `TITAN_ACTION_SMOOTHING_ALPHA`: fator EMA da suavização (`0.35` padrão; menor = mais estável)
+- `TITAN_ACTION_SMOOTHING_DEADZONE_PX`: ignora microvariações abaixo deste delta em pixels (`3` padrão)
+
+`TITAN_ACTIVE_PLAYERS` é fallback manual. O `VisionTool` agora tenta inferir automaticamente `active_players` por frame (label explícito > contagem de oponentes detectados > fallback contextual).
+
+O `VisionTool` também tenta calibrar automaticamente coordenadas dos botões (`fold`, `call`, `raise_small`, `raise_big`) a partir dos labels detectados no frame e aplica no `ActionTool` em runtime.
+
+No `PokerAgent`, essa calibração agora fica em cache por `table_id`: quando um frame não traz labels de botão, o agente reutiliza a última calibração válida da mesa. Para desligar, use `TITAN_ACTION_CALIBRATION_CACHE=0`.
+
+Esse cache também é persistido em arquivo local por escopo `table_id + session_id` (via `TITAN_ACTION_CALIBRATION_SESSION`), permitindo restore automático após reinício do processo.
+
+Quando o arquivo ultrapassa o limite de scopes, entradas mais antigas são podadas automaticamente, preservando os scopes mais recentes.
+
+Para reduzir oscilação entre frames, o agente aplica suavização temporal nas coordenadas detectadas (EMA + deadzone em pixels). Ajuste fino por `TITAN_ACTION_SMOOTHING_ALPHA` e `TITAN_ACTION_SMOOTHING_DEADZONE_PX`.
+
+### Operação manual do cache de calibração
+
+Utilitário: `./scripts/action_cache_tool.ps1`
+
+- Listar scopes:
+  - `./scripts/action_cache_tool.ps1 -Mode list`
+  - `./scripts/action_cache_tool.ps1 -Mode list -Json`
+- Podar mantendo N scopes mais recentes:
+  - `./scripts/action_cache_tool.ps1 -Mode prune -MaxScopes 50`
+- Remover scope específico:
+  - `./scripts/action_cache_tool.ps1 -Mode delete -Scope table_default::default`
+  - `./scripts/action_cache_tool.ps1 -Mode delete -TableId table_default -Session default`
+- Limpar tudo:
+  - `./scripts/action_cache_tool.ps1 -Mode clear`
 
 Exemplo (PowerShell):
 
@@ -80,6 +125,53 @@ Exemplo (PowerShell):
 - `$env:TITAN_MONITOR_TOP="100"`
 - `$env:TITAN_MONITOR_WIDTH="1280"`
 - `$env:TITAN_MONITOR_HEIGHT="720"`
+
+## Agente cliente ZMQ (loop completo)
+
+`agent/poker_agent.py` agora executa loop completo no cliente:
+
+1. lê estado da mesa via `VisionTool`
+2. faz check-in no `HiveBrain` com `hero_cards` e `active_players`
+3. injeta `dead_cards` + `heads_up_obfuscation` retornados pelo servidor em memória compartilhada
+4. executa `PokerHandWorkflow` com o mesmo snapshot (decisão consistente)
+5. aciona `ActionTool`/`GhostMouse`
+
+O agente agora usa `RedisMemory` como backend de estado (com fallback automático para memória local quando Redis não está disponível). Isso permite:
+
+- Persistência de estado RNG entre reinícios do processo (TTL=0 para `rng_audit_state`)
+- Compartilhamento de estado entre agentes na mesma máquina (se Redis estiver rodando)
+
+Variável: `TITAN_REDIS_URL` (padrão: `redis://127.0.0.1:6379/0`)
+
+Execução rápida (PowerShell):
+
+- `$env:TITAN_SIM_SCENARIO="cycle"`
+- `$env:TITAN_AGENT_MAX_CYCLES="5"`
+- `python -m agent.poker_agent`
+
+Para aguardar mudança de estado em 30 FPS (ex.: evento de "Minha Vez"):
+
+- `$env:TITAN_VISION_WAIT_STATE_CHANGE="1"`
+- `$env:TITAN_VISION_WAIT_MY_TURN="1"`
+- `$env:TITAN_VISION_POLL_FPS="30"`
+- `$env:TITAN_VISION_CHANGE_TIMEOUT="1.5"`
+- `python -m agent.poker_agent`
+
+## Lançando o squad completo
+
+### Via BAT (Windows):
+
+- `start_squad.bat`
+
+### Via PowerShell (recomendado):
+
+- `./scripts/start_squad.ps1`
+- `./scripts/start_squad.ps1 -Agents 3 -TableId table_beta`
+- `./scripts/start_squad.ps1 -Agents 2 -MaxCycles 10 -SimScenario cycle`
+
+O launcher detecta automaticamente o `.venv` do projeto e inicia HiveBrain + N agentes + Orchestrator.
+
+Ctrl+C no terminal PowerShell encerra todos os processos.
 
 ## Smoke test rápido (recomendado)
 
@@ -100,6 +192,13 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 - `fold`, `call`, `raise_small`, `raise_big`
 
 A decisão considera `win_rate`, `tie_rate`, `pot_odds` e qualidade da informação observada na mesa.
+
+A calibração de thresholds/sizing considera também:
+
+- perfil de mesa (`tight|normal|aggressive`) por street
+- posição (`utg|mp|co|btn|sb|bb`) por street
+- efeito multiway (`TITAN_OPPONENTS`)
+- contexto de SPR (stack-to-pot ratio) para spots de compromisso no turn/river
 
 ### RNG Watchdog + Evasão
 
@@ -124,6 +223,11 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -OpenLastReport`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -PrintLastReport`
 - `./scripts/run_windows.ps1 -Ticks 10 -LabelMapFile simulator/vision/label_map.example.json`
+- `./scripts/run_windows.ps1 -Ticks 10 -LabelMode dataset_v1`
+- `./scripts/run_windows.ps1 -Ticks 10 -LabelMode dataset_v1 -LabelMapFile simulator/vision/label_map.example.json`
+
+`-LabelMode` é o nome preferido do parâmetro. `-LabelProfile` continua aceito como alias legado por compatibilidade.
+
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile aggressive`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition btn`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition co -Opponents 4`
@@ -131,6 +235,10 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -DynamicSimulations`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -ProfileSweep`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -Opponents 3 -Simulations 3000 -PositionSweep`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -UseBestBaseline`
+- `./scripts/run_windows.ps1 -PrintBaseline -UseBestBaseline -ReportDir reports`
+- `./scripts/run_windows.ps1 -PrintBaselineJson -UseBestBaseline -ReportDir reports`
+- `./scripts/run_windows.ps1 -HealthOnly -UseBestBaseline -SaveBestBaseline -ReportDir reports`
 
 Também é possível forçar um cenário específico:
 
@@ -158,6 +266,118 @@ Para benchmark rápido A/B/C por perfil (`tight`, `normal`, `aggressive`), use `
 Para benchmark rápido por posição (`utg`, `mp`, `co`, `btn`, `sb`, `bb`), use `-PositionSweep`.
 
 Use apenas um sweep por execução: `-ProfileSweep` ou `-PositionSweep`.
+
+### Recomendação inicial (baseline de benchmark)
+
+No benchmark simulado curto (`cycle`, `12 ticks`, `opponents=3`, `simulations=3000`, `dynamic=on`), o ranking mais recente apontou:
+
+- **Melhor profile:** `normal`
+- **Pior profile:** `aggressive`
+- **Melhor posição:** `bb`
+- **Pior posição:** `utg`
+
+Sugestão prática inicial de operação para testes controlados:
+
+- `TITAN_TABLE_PROFILE=normal`
+- `TITAN_TABLE_POSITION=bb`
+
+Para aplicar automaticamente o último baseline salvo nos sweeps, use:
+
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -UseBestBaseline -ReportDir reports`
+
+Para apenas consultar no terminal o baseline efetivo (sem iniciar healthcheck/engine), use:
+
+- `./scripts/run_windows.ps1 -PrintBaseline -UseBestBaseline -ReportDir reports`
+
+Para saída JSON (útil para automação/CI), use:
+
+- `./scripts/run_windows.ps1 -PrintBaselineJson -UseBestBaseline -ReportDir reports`
+
+Também existe utilitário dedicado para consulta de baseline (sem depender do fluxo do runner):
+
+- `./scripts/print_baseline.ps1 -ReportDir reports`
+- `./scripts/print_baseline.ps1 -ReportDir reports -Json`
+
+Para validar rapidamente regressão de baseline (LabelMode + alias legado + JSON), use:
+
+- `./scripts/smoke_baseline.ps1 -ReportDir reports`
+
+Para validar rapidamente regressão de sweep (ProfileSweep + PositionSweep + geração de summaries), use:
+
+- `./scripts/smoke_sweep.ps1 -ReportDir reports`
+
+Para rodar baseline + sweep em uma única execução (status único para CI), use:
+
+- `./scripts/smoke_all.ps1 -ReportDir reports`
+
+Para validar integração multi-agente (HiveBrain + 2 agentes + protocolo squad), use:
+
+- `./scripts/smoke_squad.ps1 -ReportDir reports`
+
+O `smoke_all.ps1` agora inclui automaticamente o `smoke_squad.ps1`.
+
+## CI (GitHub Actions)
+
+Workflow pronto em [../.github/workflows/project_titan_smoke.yml](../.github/workflows/project_titan_smoke.yml).
+
+Ele roda no `windows-latest`, instala dependências de `requirements.txt`, executa `smoke_all.ps1` e publica `project_titan/reports` como artifact.
+
+Quando o passo de smoke falha, o workflow também gera automaticamente um `ci_debug_bundle_*.zip` dentro de `reports` para facilitar troubleshooting no artifact.
+
+Para montar um pacote local de troubleshooting (scripts + docs + governança + reports), use:
+
+- `./scripts/collect_ci_debug.ps1 -ReportDir reports -OutputDir reports`
+
+O comando gera `reports/ci_debug_bundle_*.zip` e imprime o caminho final no terminal.
+
+### Proteção de branch (recomendado)
+
+Para exigir o smoke no merge para `main`:
+
+1. GitHub → `Settings` → `Branches`.
+2. Em `Branch protection rules`, crie/edite a regra para `main`.
+3. Ative `Require a pull request before merging`.
+4. Ative `Require status checks to pass before merging`.
+5. Em checks obrigatórios, selecione o job `smoke` do workflow `Project Titan Smoke`.
+
+Opcional (mais rígido):
+
+- `Require branches to be up to date before merging`.
+- `Require conversation resolution before merging`.
+- `Do not allow bypassing the above settings` (apenas se o time já estiver pronto para política estrita).
+
+## Definition of Done (DoD)
+
+Antes de abrir/mesclar PR em `main`, use este checklist:
+
+- [ ] `./scripts/smoke_baseline.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_sweep.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_squad.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_all.ps1 -ReportDir reports` executou com sucesso.
+- [ ] Workflow `Project Titan Smoke` passou no PR.
+- [ ] Arquivos de documentação afetados foram atualizados (`README`, scripts).
+- [ ] Regra de branch protection com check obrigatório `smoke` está ativa em `main`.
+
+Template de PR disponível em [../.github/PULL_REQUEST_TEMPLATE.md](../.github/PULL_REQUEST_TEMPLATE.md).
+
+Owners de revisão definidos em [../.github/CODEOWNERS](../.github/CODEOWNERS).
+
+Guia de contribuição em [../CONTRIBUTING.md](../CONTRIBUTING.md).
+
+Ordem de resolução do baseline com `-UseBestBaseline`:
+
+1. `baseline_best.json` (se existir e estiver válido)
+2. último `sweep_summary_profile_*.json` + último `sweep_summary_position_*.json`
+3. fallback para `-TableProfile` e `-TablePosition`
+
+Para persistir o baseline atual em arquivo único (`baseline_best.json`), use:
+
+- `./scripts/run_windows.ps1 -HealthOnly -UseBestBaseline -SaveBestBaseline -ReportDir reports`
+
+Comandos usados no benchmark:
+
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 12 -TickSeconds 0.1 -Opponents 3 -Simulations 3000 -DynamicSimulations -ProfileSweep -ReportDir reports`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 12 -TickSeconds 0.1 -Opponents 3 -Simulations 3000 -DynamicSimulations -PositionSweep -ReportDir reports`
 
 Os modos de sweep agora exibem ranking automático (`Best`/`Worst`) por `score` composto (`average_win_rate` + bônus de `raises` - penalidade de `folds`), com desempate por `average_win_rate`, `raises` e `folds`.
 
@@ -212,14 +432,90 @@ Exemplo de mapeamento JSON:
 
 Build recomendado via WSL/Linux com Buildozer.
 
-## Observação sobre exit code
+## Ghost Mouse (Ghost Protocol)
 
-- `python -m orchestrator.engine` é um loop contínuo (não encerra sozinho).
-- Se interrompido por timeout/stop externo, pode aparecer código de saída diferente de `0` sem indicar crash.
+`agent/ghost_mouse.py` implementa o protocolo de humanizacao de input:
 
-## Próximos passos sugeridos
+- **Curvas de Bezier cubicas**: o cursor nunca move em linha reta. Dois control points aleatorios geram um arco natural.
+- **Ruido Gaussiano**: cada ponto intermediario recebe perturbacao `gauss(0, noise_amplitude)` para simular tremor humano.
+- **Timing variavel por dificuldade da decisao**:
+  - Easy (preflop fold): 0.8 - 1.5s
+  - Medium (raise no flop, fold no turn/river): 2.0 - 4.0s
+  - Hard (raise no turn/river): 4.0 - 12.0s
+- **Click hold aleatorio**: entre 40ms e 120ms para simular pressao do botao do mouse.
+- **Backend real via PyAutoGUI** (quando `TITAN_GHOST_MOUSE=1`) ou modo simulado seguro para CI/teste.
 
-1. Ajustar regras/benchmark de Monte Carlo para PLO em produção
-2. Aumentar cobertura de labels dead/burn/muck no dataset YOLO
-3. Implementar parser de labels YOLO específico do dataset
-4. Calibrar thresholds/sizing por perfil de mesa e posição
+### Variaveis de ambiente do Ghost Mouse
+
+- `TITAN_GHOST_MOUSE`: `0` (padrao, simulado) ou `1` (ativa PyAutoGUI real)
+- `TITAN_BTN_FOLD`: coordenadas do botao fold, ex: `600,700`
+- `TITAN_BTN_CALL`: coordenadas do botao call, ex: `800,700`
+- `TITAN_BTN_RAISE_SMALL`: coordenadas do botao raise small, ex: `1000,700`
+- `TITAN_BTN_RAISE_BIG`: coordenadas do botao raise big, ex: `1000,700`
+
+`tools/action_tool.py` agora delega para o `GhostMouse` automaticamente, usando `classify_difficulty(action, street)` para determinar o timing adequado.
+
+## Obfuscacao de colusao (Heads-Up)
+
+Quando dois agentes do sistema ficam sozinhos na mesma mesa (heads-up), o `HiveBrain` seta `heads_up_obfuscation=true` no check-in.
+
+O workflow detecta essa flag e:
+
+- Converte `call` em `raise_small`
+- Converte `raise_small` em `raise_big` (quando score >= 0.55)
+
+Isso garante que observadores vejam combate real entre os agentes, nunca check-down.
+
+## Equity Monte Carlo PLO (Villains)
+
+Viloes agora sao avaliados no mesmo formato Omaha do hero (PLO4/PLO5/PLO6), nao mais como Hold'em (2 cartas). O numero de cartas por vilao e igual ao do hero (`len(hero_cards)`), e cada vilao usa `_evaluate_omaha_like()` com `combinations(hand, 2) x combinations(board, 3)`.
+
+## Logs coloridos (terminal)
+
+O terminal usa ANSI colors para demo/apresentacao via `utils/logger.py`:
+
+- `[HiveBrain]` em magenta
+- `[Orchestrator]` em ciano
+- `[Agent]` em verde
+- Niveis: `>` info (verde), `+` success (verde brilhante), `!` warn (amarelo), `X` error (vermelho), `*` highlight (negrito)
+- Desativa com `TITAN_NO_COLOR=1` ou `NO_COLOR=1`
+- Compativel com Windows Terminal, VS Code, e conhost (Windows 10+)
+
+O `PokerAgent` agora usa `TitanLogger` para output colorido em vez de `print()` cru. Modo squad aparece com highlight.
+
+## Auto-reconnect ZMQ (HiveBrain)
+
+O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
+
+- Ate 10 tentativas com backoff incremental (0.5s, 1.0s, ... ate 5.0s)
+- Log colorido de cada tentativa e sucesso/falha
+- Se exceder o limite, encerra graciosamente
+
+## Observacao sobre exit code
+
+- `python -m orchestrator.engine` e um loop continuo (nao encerra sozinho).
+- Se interrompido por timeout/stop externo, pode aparecer codigo de saida diferente de `0` sem indicar crash.
+
+## Proximos passos sugeridos
+
+1. Treinar modelo YOLO com dataset de cartas PLO6 (canto superior esquerdo)
+2. Calibrar GhostMouse com coordenadas reais do emulador
+3. Teste end-to-end com emulador real + modelo YOLO treinado
+4. Dashboard web para monitoramento em tempo real (mesas, agentes, RNG flags)
+5. Profiling de performance do pipeline de visão a 30 FPS sob carga real
+
+### Funcionalidades já implementadas
+
+- [x] Visão YOLO com 30 FPS polling + detecção de mudança de estado + is_my_turn
+- [x] Detecção automática de jogadores ativos por frame
+- [x] Auto-calibração de botões de ação a partir de YOLO
+- [x] Cache de calibração por mesa (memória + arquivo + pruning + smoothing)
+- [x] Protocolo Hive Mind (ZMQ + Redis + check-in + God Mode + dead_cards)
+- [x] RNG Watchdog (Z-Score + SUPER_USER + Protocolo de Evasão)
+- [x] Ghost Protocol (Bézier + timing variável + obfuscação heads-up)
+- [x] Memória compartilhada via RedisMemory (com fallback in-memory)
+- [x] Logs coloridos (TitanLogger) em HiveBrain, Orchestrator e Agent
+- [x] Lançador de squad (bat + PowerShell) com auto-detecção de venv
+- [x] Smoke test de squad (multi-agente + HiveBrain)
+- [x] CI/CD com GitHub Actions
+- [x] Utilitário operacional de cache de calibração

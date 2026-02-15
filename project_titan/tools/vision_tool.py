@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import os
 import re
+import time
 from typing import Any
 
 
@@ -45,7 +46,11 @@ class TableSnapshot:
     stack: float
     dead_cards: list[str] = field(default_factory=list)
     current_opponent: str = ""
+    active_players: int = 0
+    action_points: dict[str, tuple[int, int]] = field(default_factory=dict)
     showdown_events: list[dict[str, Any]] = field(default_factory=list)
+    is_my_turn: bool = False
+    state_changed: bool = False
 
 
 @dataclass(slots=True)
@@ -61,12 +66,14 @@ class VisionTool:
         self.model_path = model_path or os.getenv("TITAN_YOLO_MODEL", "")
         self.monitor = monitor
         self.debug_labels = os.getenv("TITAN_VISION_DEBUG_LABELS", "0") == "1"
+        self.label_profile = os.getenv("TITAN_VISION_LABEL_PROFILE", "generic").strip().lower()
         self.label_aliases = self._load_label_aliases()
         self.sim_scenario = os.getenv("TITAN_SIM_SCENARIO", "off").strip().lower()
         self._sim_index = 0
         self._unknown_labels: set[str] = set()
         self._model: Any | None = None
         self._load_error: str | None = None
+        self._last_state_signature: str = ""
 
         if self.model_path:
             self._load_model()
@@ -123,6 +130,79 @@ class VisionTool:
         alias = self.label_aliases.get(label.strip().lower())
         if alias is not None:
             return alias
+        return self._apply_profile_alias(label)
+
+    def _apply_profile_alias(self, label: str) -> str:
+        if self.label_profile not in {"dataset_v1", "dataset-1", "yolo_dataset_v1"}:
+            return label
+
+        normalized = label.strip().lower().replace(" ", "_")
+        normalized = re.sub(r"[^a-z0-9_\-.]", "", normalized)
+        normalized = normalized.replace("-", "_")
+        normalized = re.sub(r"_+", "_", normalized)
+
+        hero_match = re.match(r"^(hero|player|my)_card(?:_\d+)?_([0-9tjqka]{1,2}[cdhs])$", normalized)
+        if hero_match is not None:
+            card_token = self._normalize_card_token(hero_match.group(2))
+            if card_token is not None:
+                return f"hero_{card_token}"
+
+        board_match = re.match(
+            r"^(?:table_)?(?:board|flop|turn|river)(?:_card)?(?:_\d+)?_([0-9tjqka]{1,2}[cdhs])$",
+            normalized,
+        )
+        if board_match is not None:
+            card_token = self._normalize_card_token(board_match.group(1))
+            if card_token is not None:
+                return f"board_{card_token}"
+
+        dead_match = re.match(r"^(?:burn|dead|muck|folded)(?:_card)?(?:_\d+)?_([0-9tjqka]{1,2}[cdhs])$", normalized)
+        if dead_match is not None:
+            card_token = self._normalize_card_token(dead_match.group(1))
+            if card_token is not None:
+                return f"dead_{card_token}"
+
+        dead_tokens = {
+            "burn",
+            "burned",
+            "dead",
+            "muck",
+            "mucked",
+            "folded",
+            "discard",
+            "discarded",
+            "gone",
+        }
+        dead_parts = [part for part in normalized.split("_") if part]
+        if dead_parts and any(part in dead_tokens for part in dead_parts):
+            for part in dead_parts:
+                card_token = self._normalize_card_token(part)
+                if card_token is not None:
+                    return f"dead_{card_token}"
+
+            full_card_token = self._normalize_card_token(normalized)
+            if full_card_token is not None:
+                return f"dead_{full_card_token}"
+
+        pot_match = re.match(r"^(?:pot|pote)(?:_value)?_([0-9]+(?:\.[0-9]+)?)$", normalized)
+        if pot_match is not None:
+            return f"pot_{pot_match.group(1)}"
+
+        stack_match = re.match(r"^(?:hero_stack|stack|my_stack)(?:_value)?_([0-9]+(?:\.[0-9]+)?)$", normalized)
+        if stack_match is not None:
+            return f"hero_stack_{stack_match.group(1)}"
+
+        opponent_match = re.match(r"^(?:opponent|opp|villain)(?:_id)?_([a-z0-9_]+)$", normalized)
+        if opponent_match is not None:
+            return f"opponent_{opponent_match.group(1)}"
+
+        showdown_match = re.match(
+            r"^(?:showdown|sd|allin)_([a-z0-9_]+)_(?:eq|equity)_([0-9]+(?:\.[0-9]+)?)(p)?_(?:won|win|lost|lose)$",
+            normalized,
+        )
+        if showdown_match is not None:
+            return normalized
+
         return label
 
     @staticmethod
@@ -281,6 +361,148 @@ class VisionTool:
         return None
 
     @staticmethod
+    def _parse_turn_label(label: str) -> bool | None:
+        normalized = label.strip().lower().replace("-", "_")
+        normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+
+        positive_tokens = {
+            "my_turn",
+            "your_turn",
+            "action_required",
+            "act_now",
+            "turn_on",
+            "hero_turn",
+            "btn_call",
+            "btn_raise",
+            "btn_fold",
+        }
+        negative_tokens = {
+            "not_my_turn",
+            "waiting_turn",
+            "turn_off",
+            "no_action",
+        }
+
+        if normalized in positive_tokens:
+            return True
+        if normalized in negative_tokens:
+            return False
+        return None
+
+    @staticmethod
+    def _parse_active_players_label(label: str) -> int | None:
+        normalized = label.strip().lower().replace("-", "_")
+        normalized = re.sub(r"[^a-z0-9_\.]", "", normalized)
+
+        patterns = [
+            r"^(?:active_players|players_active|player_count|players_count|table_players|alive_players)_([0-9]{1,2})$",
+            r"^(?:seats|players)_([0-9]{1,2})$",
+            r"^(?:active|alive)_([0-9]{1,2})$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, normalized)
+            if match is None:
+                continue
+            try:
+                value = int(match.group(1))
+            except ValueError:
+                continue
+            if 0 <= value <= 10:
+                return value
+        return None
+
+    @staticmethod
+    def _parse_action_button_label(label: str) -> str | None:
+        normalized = label.strip().lower().replace("-", "_")
+        normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+
+        fold_patterns = [
+            r"^(?:btn_)?fold(?:_button)?$",
+            r"^(?:button_)?fold$",
+            r"^action_fold$",
+        ]
+        call_patterns = [
+            r"^(?:btn_)?call(?:_button)?$",
+            r"^(?:button_)?call$",
+            r"^action_call$",
+            r"^check_call$",
+            r"^check$",
+        ]
+        raise_patterns = [
+            r"^(?:btn_)?raise(?:_button)?$",
+            r"^(?:button_)?raise$",
+            r"^action_raise$",
+            r"^(?:btn_)?bet(?:_button)?$",
+            r"^action_bet$",
+        ]
+        raise_big_patterns = [
+            r"^(?:btn_)?allin(?:_button)?$",
+            r"^(?:button_)?allin$",
+            r"^action_allin$",
+            r"^raise_big$",
+        ]
+
+        for pattern in fold_patterns:
+            if re.match(pattern, normalized):
+                return "fold"
+        for pattern in call_patterns:
+            if re.match(pattern, normalized):
+                return "call"
+        for pattern in raise_big_patterns:
+            if re.match(pattern, normalized):
+                return "raise_big"
+        for pattern in raise_patterns:
+            if re.match(pattern, normalized):
+                return "raise_small"
+        return None
+
+    @staticmethod
+    def _state_signature(snapshot: TableSnapshot) -> str:
+        hero_key = ",".join(snapshot.hero_cards)
+        board_key = ",".join(snapshot.board_cards)
+        dead_key = ",".join(snapshot.dead_cards)
+        opponent_key = snapshot.current_opponent
+        active_players_key = str(int(max(snapshot.active_players, 0)))
+        action_points_key = "|".join(
+            [
+                f"{key}:{value[0]},{value[1]}"
+                for key, value in sorted(snapshot.action_points.items(), key=lambda item: item[0])
+            ]
+        )
+        turn_key = "1" if snapshot.is_my_turn else "0"
+        pot_key = f"{snapshot.pot:.2f}"
+        stack_key = f"{snapshot.stack:.2f}"
+        return "|".join([
+            hero_key,
+            board_key,
+            dead_key,
+            opponent_key,
+            active_players_key,
+            action_points_key,
+            turn_key,
+            pot_key,
+            stack_key,
+        ])
+
+    def _mark_state_change(self, snapshot: TableSnapshot) -> TableSnapshot:
+        signature = self._state_signature(snapshot)
+        changed = bool(self._last_state_signature) and signature != self._last_state_signature
+        self._last_state_signature = signature
+        return TableSnapshot(
+            hero_cards=list(snapshot.hero_cards),
+            board_cards=list(snapshot.board_cards),
+            pot=snapshot.pot,
+            stack=snapshot.stack,
+            dead_cards=list(snapshot.dead_cards),
+            current_opponent=snapshot.current_opponent,
+            active_players=int(max(snapshot.active_players, 0)),
+            action_points=dict(snapshot.action_points),
+            showdown_events=list(snapshot.showdown_events),
+            is_my_turn=snapshot.is_my_turn,
+            state_changed=changed,
+        )
+
+    @staticmethod
     def _dedupe_cards(cards: list[str], max_size: int) -> list[str]:
         deduped: list[str] = []
         for card in cards:
@@ -299,18 +521,25 @@ class VisionTool:
             stack=0.0,
             dead_cards=[],
             current_opponent="",
+            active_players=0,
+            action_points={},
             showdown_events=[],
+            is_my_turn=False,
+            state_changed=False,
         )
 
     def _simulated_snapshot(self) -> TableSnapshot:
         scenarios: dict[str, TableSnapshot] = {
-            "wait": TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0, dead_cards=[]),
+            "wait": TableSnapshot(hero_cards=[], board_cards=[], pot=0.0, stack=0.0, dead_cards=[], active_players=0, action_points={}, is_my_turn=False),
             "fold": TableSnapshot(
                 hero_cards=["7c", "2d", "4h", "3s"],
                 board_cards=["Kc", "Qd", "9s"],
                 pot=45.0,
                 stack=180.0,
                 dead_cards=["Ah"],
+                active_players=4,
+                action_points={"fold": (600, 700), "call": (800, 700), "raise_small": (1000, 700), "raise_big": (1000, 700)},
+                is_my_turn=True,
             ),
             "call": TableSnapshot(
                 hero_cards=["As", "Kd", "Qh", "Js"],
@@ -318,6 +547,9 @@ class VisionTool:
                 pot=40.0,
                 stack=220.0,
                 dead_cards=["Tc", "8h"],
+                active_players=3,
+                action_points={"fold": (600, 700), "call": (800, 700), "raise_small": (1000, 700), "raise_big": (1000, 700)},
+                is_my_turn=True,
             ),
             "raise": TableSnapshot(
                 hero_cards=["As", "Ah", "Ks", "Kh", "Qs", "Qh"],
@@ -325,6 +557,9 @@ class VisionTool:
                 pot=20.0,
                 stack=600.0,
                 dead_cards=["2c", "2d", "2h"],
+                active_players=2,
+                action_points={"fold": (600, 700), "call": (800, 700), "raise_small": (1000, 700), "raise_big": (1000, 700)},
+                is_my_turn=True,
             ),
         }
 
@@ -359,6 +594,11 @@ class VisionTool:
         dead_cards: list[str] = []
         showdown_events: list[dict[str, Any]] = []
         current_opponent = ""
+        opponent_ids: set[str] = set()
+        explicit_active_players: int | None = None
+        action_points: dict[str, tuple[int, int]] = {}
+        action_confidence: dict[str, float] = {}
+        is_my_turn = False
         detected_pot = 0.0
         detected_stack = 0.0
 
@@ -377,6 +617,24 @@ class VisionTool:
         generic_cards: list[DetectionItem] = []
 
         for item in sorted(items, key=lambda item: item.center_x):
+            action_name = self._parse_action_button_label(item.label)
+            if action_name is not None:
+                previous_conf = action_confidence.get(action_name, -1.0)
+                if item.confidence >= previous_conf:
+                    action_points[action_name] = (int(item.center_x), int(item.center_y))
+                    action_confidence[action_name] = item.confidence
+                continue
+
+            active_players_value = self._parse_active_players_label(item.label)
+            if active_players_value is not None:
+                explicit_active_players = active_players_value
+                continue
+
+            turn_flag = self._parse_turn_label(item.label)
+            if turn_flag is not None:
+                is_my_turn = turn_flag
+                continue
+
             showdown_event = self._parse_showdown_label(item.label)
             if showdown_event is not None:
                 showdown_events.append(showdown_event)
@@ -385,6 +643,7 @@ class VisionTool:
             opponent_id = self._parse_opponent_label(item.label)
             if opponent_id:
                 current_opponent = opponent_id
+                opponent_ids.add(opponent_id)
                 continue
 
             category, card_token, numeric_value = self._parse_label(item.label)
@@ -438,6 +697,14 @@ class VisionTool:
         board_cards = self._dedupe_cards(board_cards, max_size=5)
         dead_cards = self._dedupe_cards(dead_cards, max_size=20)
 
+        inferred_active_players = 0
+        if explicit_active_players is not None:
+            inferred_active_players = explicit_active_players
+        elif opponent_ids:
+            inferred_active_players = 1 + len(opponent_ids)
+        elif hero_cards or board_cards or dead_cards or detected_pot > 0:
+            inferred_active_players = 1
+
         return TableSnapshot(
             hero_cards=hero_cards,
             board_cards=board_cards,
@@ -445,31 +712,83 @@ class VisionTool:
             stack=detected_stack,
             dead_cards=dead_cards,
             current_opponent=current_opponent,
+            active_players=inferred_active_players,
+            action_points=action_points,
             showdown_events=showdown_events,
+            is_my_turn=is_my_turn,
+            state_changed=False,
         )
 
-    def read_table(self) -> TableSnapshot:
+    @staticmethod
+    def _bool_env(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name, "").strip().lower()
+        if not raw:
+            return default
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _float_env(name: str, default: float) -> float:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    def read_table_until_state_change(
+        self,
+        timeout_seconds: float = 1.0,
+        fps: float = 30.0,
+        require_my_turn: bool = False,
+    ) -> TableSnapshot:
+        interval = 1.0 / max(fps, 1.0)
+        deadline = time.perf_counter() + max(timeout_seconds, 0.0)
+        latest = self._read_table_once()
+
+        while time.perf_counter() < deadline:
+            if latest.state_changed and (not require_my_turn or latest.is_my_turn):
+                return latest
+            time.sleep(interval)
+            latest = self._read_table_once()
+
+        return latest
+
+    def _read_table_once(self) -> TableSnapshot:
         if self.sim_scenario != "off":
-            return self._simulated_snapshot()
+            return self._mark_state_change(self._simulated_snapshot())
 
         if not self.model_path:
-            return self._fallback_snapshot()
+            return self._mark_state_change(self._fallback_snapshot())
 
         if self._model is None:
             self._load_model()
             if self._model is None:
-                return self._fallback_snapshot()
+                return self._mark_state_change(self._fallback_snapshot())
 
         frame = self._capture_frame()
         if frame is None:
-            return self._fallback_snapshot()
+            return self._mark_state_change(self._fallback_snapshot())
 
         try:
             results = self._model.predict(source=frame, verbose=False)
         except Exception:
-            return self._fallback_snapshot()
+            return self._mark_state_change(self._fallback_snapshot())
 
         if not results:
-            return self._fallback_snapshot()
+            return self._mark_state_change(self._fallback_snapshot())
 
-        return self._extract_snapshot(results[0])
+        return self._mark_state_change(self._extract_snapshot(results[0]))
+
+    def read_table(self) -> TableSnapshot:
+        wait_state_change = self._bool_env("TITAN_VISION_WAIT_STATE_CHANGE", default=False)
+        if wait_state_change:
+            timeout_seconds = self._float_env("TITAN_VISION_CHANGE_TIMEOUT", default=1.0)
+            fps = self._float_env("TITAN_VISION_POLL_FPS", default=30.0)
+            require_turn = self._bool_env("TITAN_VISION_WAIT_MY_TURN", default=False)
+            return self.read_table_until_state_change(
+                timeout_seconds=timeout_seconds,
+                fps=fps,
+                require_my_turn=require_turn,
+            )
+        return self._read_table_once()

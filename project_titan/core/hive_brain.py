@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from utils.config import ServerConfig
+from utils.logger import TitanLogger
 
 try:
     import redis
@@ -16,6 +17,8 @@ try:
     import zmq
 except Exception:
     zmq = None
+
+_log = TitanLogger("HiveBrain")
 
 
 @dataclass(slots=True)
@@ -144,12 +147,21 @@ class HiveBrain:
         agent_id = str(request.get("agent_id", "")).strip() or "unknown"
         table_id = str(request.get("table_id", "")).strip() or "table_default"
         cards = self._normalize_cards(request.get("cards", []))
+        active_players = max(int(request.get("active_players", 0)), 0)
 
         self.register_agent(agent_id=agent_id, table_id=table_id, payload={"cards": cards})
         partners, dead_cards = self._partners_from_redis(table_id=table_id, agent_id=agent_id)
 
         if not partners and not dead_cards:
             partners, dead_cards = self._partners_from_memory(table_id=table_id, agent_id=agent_id)
+
+        # Collusion obfuscation: if exactly 2 bots at the table and only
+        # 2 active players remain (heads-up), signal them to play
+        # aggressively against each other so observers see genuine combat.
+        heads_up_obfuscation = False
+        total_bots_at_table = len(partners) + 1  # current agent + partners
+        if total_bots_at_table >= 2 and active_players == 2:
+            heads_up_obfuscation = True
 
         latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
         mode = "squad" if partners else "solo"
@@ -160,6 +172,7 @@ class HiveBrain:
             "table_id": table_id,
             "partners": partners,
             "dead_cards": dead_cards,
+            "heads_up_obfuscation": heads_up_obfuscation,
             "latency_ms": latency_ms,
         }
 
@@ -168,22 +181,50 @@ class HiveBrain:
             raise RuntimeError("pyzmq não disponível. Instale dependências com requirements.txt")
 
         context = zmq.Context.instance()
-        socket = context.socket(zmq.REP)
-        socket.setsockopt(zmq.LINGER, 0)
-        socket.setsockopt(zmq.RCVTIMEO, 1000)
-        socket.bind(self.bind_address)
 
-        print(f"[HiveBrain] Listening on {self.bind_address}")
+        def _create_socket() -> Any:
+            sock = context.socket(zmq.REP)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.setsockopt(zmq.RCVTIMEO, 1000)
+            sock.bind(self.bind_address)
+            return sock
+
+        socket = _create_socket()
+
+        _log.highlight(f"Listening on {self.bind_address}")
         backend = "redis" if self._redis_client is not None else "memory"
-        print(f"[HiveBrain] Squad backend={backend} ttl={self.ttl_seconds}s")
+        _log.info(f"Squad backend={backend}  ttl={self.ttl_seconds}s")
+
+        max_reconnects = 10
+        reconnect_count = 0
 
         try:
             while True:
                 try:
                     request = socket.recv_json()
+                    reconnect_count = 0  # reset on success
                 except zmq.error.Again:
                     continue
+                except zmq.ZMQError as zmq_err:
+                    reconnect_count += 1
+                    _log.error(f"ZMQ socket error ({zmq_err}). reconnect attempt {reconnect_count}/{max_reconnects}")
+                    if reconnect_count > max_reconnects:
+                        _log.error("max reconnect attempts reached. shutting down.")
+                        break
+                    try:
+                        socket.close(0)
+                    except Exception:
+                        pass
+                    import time as _t
+                    _t.sleep(min(reconnect_count * 0.5, 5.0))
+                    try:
+                        socket = _create_socket()
+                        _log.success("reconnected successfully")
+                    except Exception as rebind_err:
+                        _log.error(f"rebind failed: {rebind_err}")
+                    continue
                 except Exception as error:
+                    _log.error(f"invalid_request: {error}")
                     socket.send_json({"ok": False, "error": f"invalid_request: {error}"})
                     continue
 
@@ -194,9 +235,20 @@ class HiveBrain:
 
                 if message_type == "checkin":
                     response = self._handle_checkin(request)
+                    mode = response.get("mode", "solo")
+                    agent_id = response.get("agent_id", "?")
+                    latency = response.get("latency_ms", 0)
+                    if mode == "squad":
+                        partners = response.get("partners", [])
+                        _log.highlight(f"Agente {agent_id} conectado -- GOD MODE ativado  partners={partners}  latency={latency}ms")
+                    else:
+                        _log.success(f"Agente {agent_id} conectado -- modo solo  latency={latency}ms")
+                    if response.get("heads_up_obfuscation"):
+                        _log.warn(f"Agente {agent_id}: obfuscacao heads-up ativa -- forcando agressividade")
                     socket.send_json(response)
                     continue
 
+                _log.warn(f"unsupported message type: {message_type}")
                 socket.send_json({"ok": False, "error": f"unsupported_type: {message_type}"})
         finally:
             socket.close(0)

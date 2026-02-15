@@ -71,6 +71,18 @@ class PokerHandWorkflow:
         return os.getenv("TITAN_CURRENT_OPPONENT", "").strip()
 
     @staticmethod
+    def _heads_up_obfuscation(memory: SupportsMemory) -> bool:
+        """Return True when the HiveBrain flagged a heads-up situation between
+        two friendly bots.  In that case, we must play aggressively (never
+        check-down) so observers see genuine combat."""
+        value = memory.get("heads_up_obfuscation", False)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @staticmethod
     def _extract_showdown_events(memory: SupportsMemory) -> list[dict[str, Any]]:
         events = memory.get("showdown_events", [])
         if not isinstance(events, list):
@@ -150,6 +162,12 @@ class PokerHandWorkflow:
             return 0.0
         return pot / max(pot + stack, 1e-6)
 
+    @staticmethod
+    def _spr(pot: float, stack: float) -> float:
+        if pot <= 0 or stack <= 0:
+            return 99.0
+        return stack / max(pot, 1e-6)
+
     @classmethod
     def _select_action(
         cls,
@@ -173,26 +191,74 @@ class PokerHandWorkflow:
         call_threshold, raise_small_threshold, raise_big_threshold = base_thresholds.get(street, (0.44, 0.65, 0.78))
         score = win_rate + (tie_rate * 0.5)
         pot_odds = cls._pot_odds(pot, stack)
+        spr = cls._spr(pot, stack)
 
-        profile_offsets: dict[str, tuple[float, float, float]] = {
-            "tight": (0.04, 0.05, 0.05),
-            "normal": (0.0, 0.0, 0.0),
-            "aggressive": (-0.03, -0.04, -0.04),
+        profile_offsets_by_street: dict[str, dict[str, tuple[float, float, float]]] = {
+            "tight": {
+                "preflop": (0.05, 0.06, 0.06),
+                "flop": (0.04, 0.05, 0.05),
+                "turn": (0.04, 0.05, 0.05),
+                "river": (0.03, 0.04, 0.04),
+            },
+            "normal": {
+                "preflop": (0.0, 0.0, 0.0),
+                "flop": (0.0, 0.0, 0.0),
+                "turn": (0.0, 0.0, 0.0),
+                "river": (0.0, 0.0, 0.0),
+            },
+            "aggressive": {
+                "preflop": (-0.04, -0.05, -0.05),
+                "flop": (-0.03, -0.04, -0.04),
+                "turn": (-0.03, -0.04, -0.04),
+                "river": (-0.02, -0.03, -0.03),
+            },
         }
-        call_offset, raise_small_offset, raise_big_offset = profile_offsets.get(table_profile, (0.0, 0.0, 0.0))
+        profile_offsets = profile_offsets_by_street.get(table_profile, profile_offsets_by_street["normal"])
+        call_offset, raise_small_offset, raise_big_offset = profile_offsets.get(street, (0.0, 0.0, 0.0))
         call_threshold += call_offset
         raise_small_threshold += raise_small_offset
         raise_big_threshold += raise_big_offset
 
-        position_offsets: dict[str, tuple[float, float, float]] = {
-            "utg": (0.03, 0.04, 0.04),
-            "mp": (0.01, 0.01, 0.01),
-            "co": (-0.01, -0.02, -0.02),
-            "btn": (-0.03, -0.04, -0.04),
-            "sb": (0.02, 0.02, 0.02),
-            "bb": (0.0, 0.0, 0.0),
+        position_offsets_by_street: dict[str, dict[str, tuple[float, float, float]]] = {
+            "utg": {
+                "preflop": (0.04, 0.05, 0.05),
+                "flop": (0.02, 0.03, 0.03),
+                "turn": (0.02, 0.03, 0.03),
+                "river": (0.01, 0.02, 0.02),
+            },
+            "mp": {
+                "preflop": (0.02, 0.02, 0.02),
+                "flop": (0.01, 0.01, 0.01),
+                "turn": (0.01, 0.01, 0.01),
+                "river": (0.0, 0.0, 0.0),
+            },
+            "co": {
+                "preflop": (-0.02, -0.03, -0.03),
+                "flop": (-0.01, -0.02, -0.02),
+                "turn": (-0.01, -0.01, -0.01),
+                "river": (0.0, -0.01, -0.01),
+            },
+            "btn": {
+                "preflop": (-0.04, -0.05, -0.05),
+                "flop": (-0.02, -0.03, -0.03),
+                "turn": (-0.02, -0.02, -0.02),
+                "river": (-0.01, -0.01, -0.01),
+            },
+            "sb": {
+                "preflop": (0.03, 0.03, 0.03),
+                "flop": (0.01, 0.01, 0.01),
+                "turn": (0.01, 0.01, 0.01),
+                "river": (0.0, 0.0, 0.0),
+            },
+            "bb": {
+                "preflop": (0.0, 0.0, 0.0),
+                "flop": (-0.01, -0.01, -0.01),
+                "turn": (-0.01, -0.01, -0.01),
+                "river": (-0.01, -0.01, -0.01),
+            },
         }
-        pos_call_offset, pos_raise_small_offset, pos_raise_big_offset = position_offsets.get(table_position, (0.0, 0.0, 0.0))
+        position_offsets = position_offsets_by_street.get(table_position, position_offsets_by_street["mp"])
+        pos_call_offset, pos_raise_small_offset, pos_raise_big_offset = position_offsets.get(street, (0.0, 0.0, 0.0))
         call_threshold += pos_call_offset
         raise_small_threshold += pos_raise_small_offset
         raise_big_threshold += pos_raise_big_offset
@@ -206,10 +272,31 @@ class PokerHandWorkflow:
         raise_small_threshold += min(pot_odds * 0.15, 0.05)
         raise_big_threshold += min(pot_odds * 0.10, 0.04)
 
+        if street in {"turn", "river"} and spr <= 2.5:
+            call_threshold -= 0.02
+            raise_small_threshold -= 0.02
+            raise_big_threshold -= 0.03
+        elif street in {"preflop", "flop"} and spr >= 8.0:
+            raise_small_threshold += 0.01
+            raise_big_threshold += 0.02
+
+        if opponents_count == 1 and table_position in {"co", "btn"}:
+            raise_small_threshold -= 0.015
+            if street in {"turn", "river"}:
+                raise_big_threshold -= 0.015
+
+        call_threshold = min(max(call_threshold, 0.25), 0.90)
+        raise_small_threshold = min(max(raise_small_threshold, call_threshold + 0.02), 0.94)
+        raise_big_threshold = min(max(raise_big_threshold, raise_small_threshold + 0.03), 0.97)
+
         information_penalty = max(0.0, 1.0 - information_quality) * 0.06
         call_threshold += information_penalty
         raise_small_threshold += information_penalty * 0.8
         raise_big_threshold += information_penalty * 0.5
+
+        call_threshold = min(max(call_threshold, 0.25), 0.92)
+        raise_small_threshold = min(max(raise_small_threshold, call_threshold + 0.02), 0.96)
+        raise_big_threshold = min(max(raise_big_threshold, raise_small_threshold + 0.03), 0.99)
 
         if score >= raise_big_threshold:
             return "raise_big", score, pot_odds
@@ -225,8 +312,8 @@ class PokerHandWorkflow:
         observed = len(hero_cards) + len(board_cards) + len(dead_cards)
         return min(max(observed / 12.0, 0.0), 1.0)
 
-    def execute(self) -> str:
-        snapshot = self.vision.read_table()
+    def execute(self, snapshot: Any | None = None) -> str:
+        snapshot = snapshot if snapshot is not None else self.vision.read_table()
         snapshot_events = getattr(snapshot, "showdown_events", [])
         if not isinstance(snapshot_events, list):
             snapshot_events = []
@@ -312,7 +399,16 @@ class PokerHandWorkflow:
             if self._rng_evasion_enabled() and rng_alert.should_evade and decision != "wait":
                 decision = "fold"
 
-        result = self.action.act(decision)
+        # Collusion obfuscation: when two friendly bots are heads-up,
+        # never check-down – escalate passive actions to look aggressive.
+        hu_obfuscation = self._heads_up_obfuscation(self.memory)
+        if hu_obfuscation and decision not in {"wait", "fold"}:
+            if decision == "call":
+                decision = "raise_small"
+            elif decision == "raise_small" and score >= 0.55:
+                decision = "raise_big"
+
+        result = self.action.act(decision, street=street)
         self.memory.set(
             "last_decision",
             {
@@ -342,6 +438,7 @@ class PokerHandWorkflow:
                     "z_score": round(self._to_float(getattr(rng_alert, "z_score", 0.0)), 4),
                     "sample_count": int(getattr(rng_alert, "sample_count", 0)) if rng_alert is not None else 0,
                 },
+                "heads_up_obfuscation": hu_obfuscation,
             },
         )
         return f"win_rate={estimate.win_rate:.2f} {result}"

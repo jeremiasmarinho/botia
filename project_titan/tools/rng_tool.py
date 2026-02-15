@@ -62,7 +62,12 @@ class RngTool:
             "version": 1,
             "players": self.auditor.export_state(max_samples_per_player=self.max_samples_per_player),
         }
-        self.storage.set(self.storage_key, payload)
+        # Use ttl=0 so RNG audit history survives across restarts.
+        try:
+            self.storage.set(self.storage_key, payload, ttl=0)  # type: ignore[call-arg]
+        except TypeError:
+            # Fallback for storage backends that don't support the ttl kwarg.
+            self.storage.set(self.storage_key, payload)
 
     @staticmethod
     def _extract_float(payload: dict[str, Any], key: str, default: float = 0.0) -> float:

@@ -95,7 +95,8 @@ class MathEngine:
 
         opponents_count = max(1, int(opponents))
         board_needed = max(0, 5 - len(board))
-        villain_needed = 2 * opponents_count
+        villain_hand_size = max(len(hero), 2)  # villains use same format as hero (PLO)
+        villain_needed = villain_hand_size * opponents_count
         sample_size = board_needed + villain_needed
 
         for _ in range(max(1, simulations)):
@@ -107,13 +108,16 @@ class MathEngine:
             sampled_board = sampled[:board_needed]
             villain_cards = sampled[board_needed:]
             villains = [
-                villain_cards[idx * 2 : (idx + 1) * 2]
+                villain_cards[idx * villain_hand_size : (idx + 1) * villain_hand_size]
                 for idx in range(opponents_count)
             ]
 
             full_board = board + sampled_board
             hero_score = self._evaluate_omaha_like(evaluator, full_board, hero)
-            villain_scores = [evaluator.evaluate(full_board, villain) for villain in villains]
+            villain_scores = [
+                self._evaluate_omaha_like(evaluator, full_board, villain)
+                for villain in villains
+            ]
             best_villain = min(villain_scores)
 
             if hero_score < best_villain:

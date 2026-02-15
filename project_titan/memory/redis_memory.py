@@ -27,14 +27,27 @@ class RedisMemory:
             self._redis_client = None
             self.backend = "memory"
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any, *, ttl: int | None = None) -> None:
+        """Store *value* under *key*.
+
+        *ttl* overrides the instance default.  Use ``ttl=0`` to persist
+        without expiry (Redis: no TTL command; memory: no expiry).
+        """
+        effective_ttl = ttl if ttl is not None else self.ttl_seconds
+
         if self._redis_client is not None:
             payload = json.dumps(value)
-            self._redis_client.setex(key, self.ttl_seconds, payload)
+            if effective_ttl > 0:
+                self._redis_client.setex(key, effective_ttl, payload)
+            else:
+                self._redis_client.set(key, payload)
             return
 
         self._cache[key] = value
-        self._expires_at[key] = time.time() + self.ttl_seconds
+        if effective_ttl > 0:
+            self._expires_at[key] = time.time() + effective_ttl
+        else:
+            self._expires_at.pop(key, None)  # no expiry
 
     def get(self, key: str, default: Any = None) -> Any:
         if self._redis_client is not None:

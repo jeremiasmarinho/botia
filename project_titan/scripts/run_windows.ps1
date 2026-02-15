@@ -1,3 +1,4 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'profile', Justification = 'False positive: script does not assign to automatic variable $PROFILE.')]
 param(
   [switch]$HealthOnly,
   [ValidateSet("off", "wait", "fold", "call", "raise", "cycle")]
@@ -10,6 +11,10 @@ param(
   [switch]$OpenLastReport,
   [switch]$PrintLastReport,
   [string]$LabelMapFile = "",
+  # Prefer -LabelMode; -LabelProfile is kept as legacy alias for compatibility.
+  [Alias("LabelProfile")]
+  [ValidateSet("generic", "dataset_v1")]
+  [string]$LabelMode = "generic",
   [ValidateSet("tight", "normal", "aggressive")]
   [string]$TableProfile = "normal",
   [ValidateSet("utg", "mp", "co", "btn", "sb", "bb")]
@@ -24,6 +29,10 @@ param(
   [switch]$CompareSweepHistory,
   [switch]$OnlySweepHistory,
   [switch]$SweepDashboard,
+  [switch]$UseBestBaseline,
+  [switch]$PrintBaseline,
+  [switch]$PrintBaselineJson,
+  [switch]$SaveBestBaseline,
   [switch]$SaveHistoryCompare,
   [ValidateSet("profile", "position")]
   [string]$SweepHistoryMode = "profile",
@@ -35,7 +44,9 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $pythonExe = $null
-$offlineMode = $OnlySweepHistory -or $SweepDashboard
+$offlineMode = $OnlySweepHistory -or $SweepDashboard -or $PrintBaseline -or $PrintBaselineJson
+
+. (Join-Path $PSScriptRoot "baseline_resolver.ps1")
 
 if (-not $offlineMode) {
   $pythonCandidates = @(
@@ -68,6 +79,7 @@ $_previousMaxTicks = $env:TITAN_MAX_TICKS
 $_previousTickSeconds = $env:TITAN_TICK_SECONDS
 $_previousReportDir = $env:TITAN_REPORT_DIR
 $_previousLabelMapFile = $env:TITAN_VISION_LABEL_MAP_FILE
+$_previousLabelMode = $env:TITAN_VISION_LABEL_PROFILE
 $_previousTableProfile = $env:TITAN_TABLE_PROFILE
 $_previousTablePosition = $env:TITAN_TABLE_POSITION
 $_previousOpponents = $env:TITAN_OPPONENTS
@@ -385,11 +397,71 @@ try {
   $env:TITAN_TICK_SECONDS = "$TickSeconds"
   Write-Host "[RUN] TITAN_TICK_SECONDS=$TickSeconds"
 
-  $env:TITAN_TABLE_PROFILE = "$TableProfile"
-  Write-Host "[RUN] TITAN_TABLE_PROFILE=$TableProfile"
+  $baselineReportDir = $resolvedReportDir
+  if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
+    if ([System.IO.Path]::IsPathRooted($ReportDir)) {
+      $baselineReportDir = $ReportDir
+    }
+    else {
+      $baselineReportDir = Join-Path $projectRoot $ReportDir
+    }
+  }
+  elseif ([string]::IsNullOrWhiteSpace($baselineReportDir)) {
+    $baselineReportDir = Join-Path $projectRoot "reports"
+  }
 
-  $env:TITAN_TABLE_POSITION = "$TablePosition"
-  Write-Host "[RUN] TITAN_TABLE_POSITION=$TablePosition"
+  if ($UseBestBaseline -and $null -eq $resolvedReportDir) {
+    $resolvedReportDir = $baselineReportDir
+  }
+
+  $effectiveTableProfile = $TableProfile
+  $effectiveTablePosition = $TablePosition
+  $baselineProfileSource = ""
+  $baselinePositionSource = ""
+
+  if ($UseBestBaseline) {
+    $resolvedBaseline = Resolve-TitanBaseline -Directory $baselineReportDir -FallbackProfile $TableProfile -FallbackPosition $TablePosition
+    $effectiveTableProfile = $resolvedBaseline.table_profile
+    $effectiveTablePosition = $resolvedBaseline.table_position
+    $baselineProfileSource = $resolvedBaseline.profile_source
+    $baselinePositionSource = $resolvedBaseline.position_source
+
+    if ($resolvedBaseline.source -eq "baseline_best.json") {
+      Write-Host "[RUN] Baseline loaded from file: $baselineProfileSource"
+      Write-Host "[RUN] Baseline profile from file: $effectiveTableProfile"
+      Write-Host "[RUN] Baseline position from file: $effectiveTablePosition"
+    }
+    elseif ($resolvedBaseline.source -eq "sweep_summary") {
+      Write-Host "[RUN] Baseline profile from sweep: $effectiveTableProfile"
+      Write-Host "[RUN] Baseline profile source: $baselineProfileSource"
+      Write-Host "[RUN] Baseline position from sweep: $effectiveTablePosition"
+      Write-Host "[RUN] Baseline position source: $baselinePositionSource"
+    }
+    else {
+      Write-Warning "Baseline não encontrado em '$baselineReportDir'. Usando -TableProfile=$TableProfile e -TablePosition=$TablePosition"
+    }
+  }
+
+  $env:TITAN_TABLE_PROFILE = "$effectiveTableProfile"
+  Write-Host "[RUN] TITAN_TABLE_PROFILE=$effectiveTableProfile"
+
+  $env:TITAN_TABLE_POSITION = "$effectiveTablePosition"
+  Write-Host "[RUN] TITAN_TABLE_POSITION=$effectiveTablePosition"
+
+  if ($SaveBestBaseline) {
+    $savedBaselineFile = Write-TitanBaselineFile `
+      -Directory $baselineReportDir `
+      -TableMode $effectiveTableProfile `
+      -TableSeat $effectiveTablePosition `
+      -ModeSource $baselineProfileSource `
+      -SeatSource $baselinePositionSource `
+      -AutoSelected ([bool]$UseBestBaseline) `
+      -Quiet
+
+    if ($null -ne $savedBaselineFile) {
+      Write-Host "[RUN] Baseline file: $savedBaselineFile"
+    }
+  }
 
   $env:TITAN_OPPONENTS = "$Opponents"
   Write-Host "[RUN] TITAN_OPPONENTS=$Opponents"
@@ -413,6 +485,9 @@ try {
     $env:TITAN_VISION_LABEL_MAP_FILE = "$resolvedLabelMapFile"
     Write-Host "[RUN] TITAN_VISION_LABEL_MAP_FILE=$resolvedLabelMapFile"
   }
+
+  $env:TITAN_VISION_LABEL_PROFILE = "$LabelMode"
+  Write-Host "[RUN] TITAN_VISION_LABEL_PROFILE=$LabelMode"
 
   if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
     if ([System.IO.Path]::IsPathRooted($ReportDir)) {
@@ -441,6 +516,45 @@ try {
   if ($null -ne $resolvedReportDir) {
     $env:TITAN_REPORT_DIR = "$resolvedReportDir"
     Write-Host "[RUN] TITAN_REPORT_DIR=$resolvedReportDir"
+  }
+
+  if ($PrintBaseline -or $PrintBaselineJson) {
+    $profileSourceLabel = if ([string]::IsNullOrWhiteSpace($baselineProfileSource)) { "manual/param" } else { $baselineProfileSource }
+    $positionSourceLabel = if ([string]::IsNullOrWhiteSpace($baselinePositionSource)) { "manual/param" } else { $baselinePositionSource }
+    if ($PrintBaseline) {
+      Write-Host "[BASELINE] profile=$effectiveTableProfile source=$profileSourceLabel"
+      Write-Host "[BASELINE] position=$effectiveTablePosition source=$positionSourceLabel"
+      Write-Host "[BASELINE] report_dir=$baselineReportDir"
+    }
+    if ($PrintBaselineJson) {
+      $baselinePayload = [PSCustomObject]@{
+        table_profile   = $effectiveTableProfile
+        table_position  = $effectiveTablePosition
+        profile_source  = $profileSourceLabel
+        position_source = $positionSourceLabel
+        report_dir      = $baselineReportDir
+      }
+      Write-Host ($baselinePayload | ConvertTo-Json -Depth 5)
+    }
+
+    $shouldExitAfterBaseline = -not (
+      $HealthOnly -or
+      $ProfileSweep -or
+      $PositionSweep -or
+      $OnlySweepHistory -or
+      $SweepDashboard -or
+      $OpenLastReport -or
+      $PrintLastReport
+    )
+
+    if ($shouldExitAfterBaseline) {
+      $baselineFlags = @()
+      if ($PrintBaseline) { $baselineFlags += "-PrintBaseline" }
+      if ($PrintBaselineJson) { $baselineFlags += "-PrintBaselineJson" }
+      $baselineFlagLabel = if ($baselineFlags.Count -gt 0) { ($baselineFlags -join " ") } else { "baseline mode" }
+      Write-Host "Baseline exibido. Encerrando por $baselineFlagLabel."
+      exit 0
+    }
   }
 
   if ($OnlySweepHistory) {
@@ -484,18 +598,18 @@ try {
     $sweepResults = @()
 
     if ($ProfileSweep) {
-      foreach ($profile in $profiles) {
-        Write-Host "[2/2] Profile sweep run: $profile"
-        $env:TITAN_TABLE_PROFILE = $profile
+      foreach ($profileName in $profiles) {
+        Write-Host "[2/2] Profile sweep run: $profileName"
+        $env:TITAN_TABLE_PROFILE = $profileName
 
         & $pythonExe -m orchestrator.engine
         if ($LASTEXITCODE -ne 0) {
-          throw "Engine finalizou com código $LASTEXITCODE no profile '$profile'"
+          throw "Engine finalizou com código $LASTEXITCODE no profile '$profileName'"
         }
 
         $latestReportData = Get-LatestRunReport -Directory $resolvedReportDir
         if ($null -eq $latestReportData) {
-          Write-Warning "Relatório não encontrado para profile '$profile'."
+          Write-Warning "Relatório não encontrado para profile '$profileName'."
           continue
         }
 
@@ -520,7 +634,7 @@ try {
 
         $sweepResults += [PSCustomObject]@{
           score              = (Get-SweepScore -AverageWinRate ([double]$reportJson.average_win_rate) -Outcomes ([int]$reportJson.outcomes) -Raises $raiseCount -Folds $foldCount)
-          profile            = $profile
+          'profile'          = $profileName
           outcomes           = [int]$reportJson.outcomes
           average_win_rate   = [double]$reportJson.average_win_rate
           folds              = $foldCount
@@ -544,7 +658,7 @@ try {
           opponents           = $Opponents
           simulations         = $Simulations
           dynamic_simulations = [bool]$DynamicSimulations
-          table_position      = $TablePosition
+          table_position      = $effectiveTablePosition
         }
         if ($null -ne $summaryFile) {
           Write-Host "[RUN] Sweep summary file: $summaryFile"
@@ -616,7 +730,7 @@ try {
           opponents           = $Opponents
           simulations         = $Simulations
           dynamic_simulations = [bool]$DynamicSimulations
-          table_profile       = $TableProfile
+          table_profile       = $effectiveTableProfile
         }
         if ($null -ne $summaryFile) {
           Write-Host "[RUN] Sweep summary file: $summaryFile"
@@ -697,6 +811,13 @@ finally {
   }
   else {
     $env:TITAN_VISION_LABEL_MAP_FILE = $_previousLabelMapFile
+  }
+
+  if ($null -eq $_previousLabelMode) {
+    Remove-Item Env:TITAN_VISION_LABEL_PROFILE -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_VISION_LABEL_PROFILE = $_previousLabelMode
   }
 
   if ($null -eq $_previousTableProfile) {

@@ -15,6 +15,9 @@ from tools.action_tool import ActionTool
 from tools.rng_tool import RngTool
 from agents.zombie_agent import ZombieAgent
 from utils.config import ServerConfig, VisionRuntimeConfig
+from utils.logger import TitanLogger
+
+_log = TitanLogger("Orchestrator")
 
 
 @dataclass(slots=True)
@@ -44,7 +47,7 @@ class Orchestrator:
         workflow = PokerHandWorkflow(vision_tool, equity_tool, action_tool, self.registry.memory, rng_tool)
         agent = ZombieAgent(workflow)
 
-        print(f"[Orchestrator] memory backend={self.registry.memory.backend}")
+        _log.info(f"memory backend={self.registry.memory.backend}")
 
         self.registry.register_tool("vision", vision_tool)
         self.registry.register_tool("equity", equity_tool)
@@ -113,13 +116,13 @@ class Orchestrator:
                 json.dump(report, report_file, ensure_ascii=False, indent=2)
             return file_path
         except OSError as error:
-            print(f"[Orchestrator] report_write_error={error}")
+            _log.error(f"report_write_error={error}")
             return None
 
     def run(self) -> None:
         self.bootstrap()
         self._running = True
-        print("[Orchestrator] running composition loop")
+        _log.highlight("running composition loop")
         tick_count = 0
         total_outcomes = 0
         action_counts: dict[str, int] = {}
@@ -138,7 +141,7 @@ class Orchestrator:
                     outcome = agent.step()
                     if outcome is not None:
                         total_outcomes += 1
-                        print(f"[Orchestrator] {agent_name}: {outcome}")
+                        _log.status(f"{agent_name}: {outcome}")
 
                         action, win_rate = self._parse_outcome_metrics(outcome)
                         if action is not None:
@@ -165,12 +168,12 @@ class Orchestrator:
 
                 tick_count += 1
                 if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
-                    print(f"[Orchestrator] reached max ticks={self.config.max_ticks}. stopping loop")
+                    _log.info(f"reached max ticks={self.config.max_ticks}. stopping loop")
                     self.stop()
                     break
                 time.sleep(self.config.tick_seconds)
         except KeyboardInterrupt:
-            print("[Orchestrator] interrupted by user. stopping loop")
+            _log.warn("interrupted by user. stopping loop")
             self.stop()
         finally:
             duration_seconds = time.perf_counter() - started_at
@@ -218,10 +221,10 @@ class Orchestrator:
                 "rng_watchdog": rng_watchdog,
                 "duration_seconds": round(duration_seconds, 3),
             }
-            print(f"[Orchestrator] run_report={json.dumps(report, ensure_ascii=False)}")
+            _log.success(f"run_report={json.dumps(report, ensure_ascii=False)}")
             report_file = self._write_report_file(report)
             if report_file is not None:
-                print(f"[Orchestrator] run_report_file={report_file}")
+                _log.info(f"run_report_file={report_file}")
 
     def stop(self) -> None:
         self._running = False

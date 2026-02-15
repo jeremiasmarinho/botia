@@ -1,9 +1,25 @@
 {
   "hero-card-1-ah": "hero_Ah",
   "hero-card-2-kd": "hero_Kd",
+  "hero-card-3-qs": "hero_Qs",
+  "hero-card-4-jc": "hero_Jc",
   "table-flop-1-7c": "board_7c",
+  "table-flop-2-8d": "board_8d",
+  "table-flop-3-kh": "board_Kh",
   "table-turn-qh": "board_Qh",
+  "table-river-2s": "board_2s",
   "burn-card-1": "dead_2s",
+  "burn-card-2": "dead_9d",
+  "burned-card-as": "dead_As",
+  "dead-card-kc": "dead_Kc",
+  "muck-card-7h": "dead_7h",
+  "mucked-card-qd": "dead_Qd",
+  "folded-card-5c": "dead_5c",
+  "discard-card-3d": "dead_3d",
   "pot_value_120": "pot_120",
-  "hero_stack_value_350": "hero_stack_350"
+  "pot_value_245.5": "pot_245.5",
+  "hero_stack_value_350": "hero_stack_350",
+  "hero_stack_value_188.25": "hero_stack_188.25",
+  "opponent_id_reg42": "opponent_reg42",
+  "showdown_reg42_eq_37_won": "showdown_reg42_eq_37_won"
 }
