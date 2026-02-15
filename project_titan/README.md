@@ -90,6 +90,12 @@ Para execução finita (encerra sozinha), use `-Ticks`.
 
 Para controlar a velocidade do loop, use `-TickSeconds` (padrão `0.2`).
 
+Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
+
+- `[Orchestrator] run_report={...}`
+
+Campos atuais: `ticks`, `outcomes`, `average_win_rate`, `action_counts`, `duration_seconds`.
+
 ## APK Android (PoC)
 
 - Estrutura mobile pronta em `mobile/`.

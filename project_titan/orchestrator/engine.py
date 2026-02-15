@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -49,23 +50,77 @@ class Orchestrator:
         self.registry.register_workflow("poker_hand", workflow)
         self.registry.register_agent("zombie_01", agent)
 
+    @staticmethod
+    def _parse_outcome_metrics(outcome: str) -> tuple[str | None, float | None]:
+        action: str | None = None
+        win_rate: float | None = None
+
+        for token in outcome.split():
+            if token.startswith("action="):
+                value = token.split("=", 1)[1].strip()
+                if value:
+                    action = value
+                continue
+
+            if token.startswith("win_rate="):
+                raw_value = token.split("=", 1)[1].strip()
+                try:
+                    win_rate = float(raw_value)
+                except ValueError:
+                    win_rate = None
+
+        return action, win_rate
+
     def run(self) -> None:
         self.bootstrap()
         self._running = True
         print("[Orchestrator] running composition loop")
         tick_count = 0
+        total_outcomes = 0
+        action_counts: dict[str, int] = {}
+        win_rate_sum = 0.0
+        win_rate_count = 0
+        started_at = time.perf_counter()
 
-        while self._running:
-            for agent_name, agent in self.registry.agents.items():
-                outcome = agent.step()
-                if outcome is not None:
-                    print(f"[Orchestrator] {agent_name}: {outcome}")
-            tick_count += 1
-            if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
-                print(f"[Orchestrator] reached max ticks={self.config.max_ticks}. stopping loop")
-                self.stop()
-                break
-            time.sleep(self.config.tick_seconds)
+        try:
+            while self._running:
+                for agent_name, agent in self.registry.agents.items():
+                    outcome = agent.step()
+                    if outcome is not None:
+                        total_outcomes += 1
+                        print(f"[Orchestrator] {agent_name}: {outcome}")
+
+                        action, win_rate = self._parse_outcome_metrics(outcome)
+                        if action is not None:
+                            action_counts[action] = action_counts.get(action, 0) + 1
+
+                        if win_rate is not None:
+                            win_rate_sum += win_rate
+                            win_rate_count += 1
+
+                tick_count += 1
+                if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
+                    print(f"[Orchestrator] reached max ticks={self.config.max_ticks}. stopping loop")
+                    self.stop()
+                    break
+                time.sleep(self.config.tick_seconds)
+        except KeyboardInterrupt:
+            print("[Orchestrator] interrupted by user. stopping loop")
+            self.stop()
+        finally:
+            duration_seconds = time.perf_counter() - started_at
+            average_win_rate = None
+            if win_rate_count > 0:
+                average_win_rate = round(win_rate_sum / win_rate_count, 4)
+
+            report = {
+                "ticks": tick_count,
+                "outcomes": total_outcomes,
+                "average_win_rate": average_win_rate,
+                "action_counts": action_counts,
+                "duration_seconds": round(duration_seconds, 3),
+            }
+            print(f"[Orchestrator] run_report={json.dumps(report, ensure_ascii=False)}")
 
     def stop(self) -> None:
         self._running = False
