@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+
+mobile/.buildozer/
+mobile/bin/
+mobile/.gradle/
+mobile/.python-for-android/
