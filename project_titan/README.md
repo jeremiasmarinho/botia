@@ -59,6 +59,7 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_VISION_DEBUG_LABELS=1`: imprime labels desconhecidos no terminal
 - `TITAN_VISION_LABEL_MAP_FILE`: caminho de JSON com aliases de labels do dataset
 - `TITAN_VISION_LABEL_MAP_JSON`: JSON inline com aliases de labels
+- `TITAN_TABLE_PROFILE`: `tight`, `normal` ou `aggressive`
 
 Exemplo (PowerShell):
 
@@ -99,6 +100,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -OpenLastReport`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports -PrintLastReport`
 - `./scripts/run_windows.ps1 -Ticks 10 -LabelMapFile simulator/vision/label_map.example.json`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile aggressive`
 
 Também é possível forçar um cenário específico:
 
@@ -110,6 +112,8 @@ Também é possível forçar um cenário específico:
 Para execução finita (encerra sozinha), use `-Ticks`.
 
 Para controlar a velocidade do loop, use `-TickSeconds` (padrão `0.2`).
+
+Para calibrar agressividade da política, use `-TableProfile` (`tight|normal|aggressive`).
 
 Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
 
