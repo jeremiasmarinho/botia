@@ -61,6 +61,7 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 - `TITAN_VISION_LABEL_MAP_JSON`: JSON inline com aliases de labels
 - `TITAN_TABLE_PROFILE`: `tight`, `normal` ou `aggressive`
 - `TITAN_TABLE_POSITION`: `utg`, `mp`, `co`, `btn`, `sb`, `bb`
+- `TITAN_OPPONENTS`: número de vilões para equity Monte Carlo (`1` a `9`)
 
 Exemplo (PowerShell):
 
@@ -103,6 +104,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -Ticks 10 -LabelMapFile simulator/vision/label_map.example.json`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile aggressive`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition btn`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TableProfile normal -TablePosition co -Opponents 4`
 
 Também é possível forçar um cenário específico:
 
@@ -118,6 +120,8 @@ Para controlar a velocidade do loop, use `-TickSeconds` (padrão `0.2`).
 Para calibrar agressividade da política, use `-TableProfile` (`tight|normal|aggressive`).
 
 Para calibrar por posição de mesa, use `-TablePosition` (`utg|mp|co|btn|sb|bb`).
+
+Para calibrar por pote multiway, use `-Opponents` (`1..9`).
 
 Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
 

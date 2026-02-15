@@ -13,7 +13,9 @@ param(
   [ValidateSet("tight", "normal", "aggressive")]
   [string]$TableProfile = "normal",
   [ValidateSet("utg", "mp", "co", "btn", "sb", "bb")]
-  [string]$TablePosition = "mp"
+  [string]$TablePosition = "mp",
+  [ValidateRange(1, 9)]
+  [int]$Opponents = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +53,7 @@ $_previousReportDir = $env:TITAN_REPORT_DIR
 $_previousLabelMapFile = $env:TITAN_VISION_LABEL_MAP_FILE
 $_previousTableProfile = $env:TITAN_TABLE_PROFILE
 $_previousTablePosition = $env:TITAN_TABLE_POSITION
+$_previousOpponents = $env:TITAN_OPPONENTS
 $resolvedReportDir = $null
 
 try {
@@ -72,6 +75,9 @@ try {
 
   $env:TITAN_TABLE_POSITION = "$TablePosition"
   Write-Host "[RUN] TITAN_TABLE_POSITION=$TablePosition"
+
+  $env:TITAN_OPPONENTS = "$Opponents"
+  Write-Host "[RUN] TITAN_OPPONENTS=$Opponents"
 
   if (-not [string]::IsNullOrWhiteSpace($LabelMapFile)) {
     if ([System.IO.Path]::IsPathRooted($LabelMapFile)) {
@@ -195,6 +201,13 @@ finally {
   }
   else {
     $env:TITAN_TABLE_POSITION = $_previousTablePosition
+  }
+
+  if ($null -eq $_previousOpponents) {
+    Remove-Item Env:TITAN_OPPONENTS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_OPPONENTS = $_previousOpponents
   }
 
   Pop-Location

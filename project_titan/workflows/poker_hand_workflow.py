@@ -38,6 +38,13 @@ class PokerHandWorkflow:
         return "mp"
 
     @staticmethod
+    def _opponents_count() -> int:
+        raw_value = os.getenv("TITAN_OPPONENTS", "1").strip()
+        if not raw_value.isdigit():
+            return 1
+        return min(max(int(raw_value), 1), 9)
+
+    @staticmethod
     def _normalize_card(card: str) -> str | None:
         cleaned = card.strip().upper().replace("10", "T")
         if len(cleaned) != 2:
@@ -89,6 +96,7 @@ class PokerHandWorkflow:
         information_quality: float,
         table_profile: str,
         table_position: str,
+        opponents_count: int,
     ) -> tuple[str, float, float]:
         base_thresholds: dict[str, tuple[float, float, float]] = {
             "preflop": (0.40, 0.62, 0.75),
@@ -123,6 +131,11 @@ class PokerHandWorkflow:
         call_threshold += pos_call_offset
         raise_small_threshold += pos_raise_small_offset
         raise_big_threshold += pos_raise_big_offset
+
+        multiway_factor = max(0, opponents_count - 1)
+        call_threshold += min(multiway_factor * 0.015, 0.07)
+        raise_small_threshold += min(multiway_factor * 0.02, 0.10)
+        raise_big_threshold += min(multiway_factor * 0.025, 0.12)
 
         call_threshold += min(pot_odds * 0.35, 0.08)
         raise_small_threshold += min(pot_odds * 0.15, 0.05)
@@ -165,10 +178,16 @@ class PokerHandWorkflow:
         dead_cards = [card for card in dead_cards if card not in visible_cards]
         self.memory.set("dead_cards", dead_cards)
 
-        estimate = self.equity.estimate(snapshot.hero_cards, snapshot.board_cards, dead_cards=dead_cards)
         street = self._street_from_board(snapshot.board_cards)
         table_profile = self._table_profile()
         table_position = self._table_position()
+        opponents_count = self._opponents_count()
+        estimate = self.equity.estimate(
+            snapshot.hero_cards,
+            snapshot.board_cards,
+            dead_cards=dead_cards,
+            opponents=opponents_count,
+        )
         info_quality = self._information_quality(snapshot.hero_cards, snapshot.board_cards, dead_cards)
         score = estimate.win_rate + (estimate.tie_rate * 0.5)
         pot_odds = self._pot_odds(snapshot.pot, snapshot.stack)
@@ -187,6 +206,7 @@ class PokerHandWorkflow:
                 information_quality=info_quality,
                 table_profile=table_profile,
                 table_position=table_position,
+                opponents_count=opponents_count,
             )
 
         result = self.action.act(decision)
@@ -204,6 +224,7 @@ class PokerHandWorkflow:
                 "street": street,
                 "table_profile": table_profile,
                 "table_position": table_position,
+                "opponents": opponents_count,
                 "pot": snapshot.pot,
                 "stack": snapshot.stack,
                 "decision": decision,

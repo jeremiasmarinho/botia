@@ -76,6 +76,7 @@ class MathEngine:
         board_cards: Iterable[str],
         dead_cards: Iterable[str],
         simulations: int = 10_000,
+        opponents: int = 1,
     ) -> EquityResult:
         hero = self._parse_cards(hero_cards)
         board = self._parse_cards(board_cards)
@@ -92,8 +93,9 @@ class MathEngine:
         ties = 0
         runs = 0
 
+        opponents_count = max(1, int(opponents))
         board_needed = max(0, 5 - len(board))
-        villain_needed = 2
+        villain_needed = 2 * opponents_count
         sample_size = board_needed + villain_needed
 
         for _ in range(max(1, simulations)):
@@ -103,15 +105,20 @@ class MathEngine:
 
             sampled = sample(available, sample_size)
             sampled_board = sampled[:board_needed]
-            villain = sampled[board_needed:]
+            villain_cards = sampled[board_needed:]
+            villains = [
+                villain_cards[idx * 2 : (idx + 1) * 2]
+                for idx in range(opponents_count)
+            ]
 
             full_board = board + sampled_board
             hero_score = self._evaluate_omaha_like(evaluator, full_board, hero)
-            villain_score = evaluator.evaluate(full_board, villain)
+            villain_scores = [evaluator.evaluate(full_board, villain) for villain in villains]
+            best_villain = min(villain_scores)
 
-            if hero_score < villain_score:
+            if hero_score < best_villain:
                 wins += 1
-            elif hero_score == villain_score:
+            elif hero_score == best_villain:
                 ties += 1
             runs += 1
 
