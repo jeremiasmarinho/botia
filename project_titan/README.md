@@ -76,6 +76,7 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 Para ver decisões variando no Windows sem visão real, use:
 
 - `./scripts/run_windows.ps1 -SimScenario cycle`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10`
 
 Também é possível forçar um cenário específico:
 
@@ -83,6 +84,8 @@ Também é possível forçar um cenário específico:
 - `./scripts/run_windows.ps1 -HealthOnly -SimScenario fold`
 - `./scripts/run_windows.ps1 -HealthOnly -SimScenario call`
 - `./scripts/run_windows.ps1 -HealthOnly -SimScenario raise`
+
+Para execução finita (encerra sozinha), use `-Ticks`.
 
 ## APK Android (PoC)
 

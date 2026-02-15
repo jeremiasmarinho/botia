@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,7 @@ from utils.config import ServerConfig, VisionRuntimeConfig
 @dataclass(slots=True)
 class EngineConfig:
     tick_seconds: float = 0.2
+    max_ticks: int | None = None
 
 
 class Orchestrator:
@@ -51,12 +53,18 @@ class Orchestrator:
         self.bootstrap()
         self._running = True
         print("[Orchestrator] running composition loop")
+        tick_count = 0
 
         while self._running:
             for agent_name, agent in self.registry.agents.items():
                 outcome = agent.step()
                 if outcome is not None:
                     print(f"[Orchestrator] {agent_name}: {outcome}")
+            tick_count += 1
+            if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
+                print(f"[Orchestrator] reached max ticks={self.config.max_ticks}. stopping loop")
+                self.stop()
+                break
             time.sleep(self.config.tick_seconds)
 
     def stop(self) -> None:
@@ -64,7 +72,9 @@ class Orchestrator:
 
 
 def main() -> None:
-    Orchestrator().run()
+    max_ticks_raw = os.getenv("TITAN_MAX_TICKS", "").strip()
+    max_ticks = int(max_ticks_raw) if max_ticks_raw.isdigit() else None
+    Orchestrator(config=EngineConfig(max_ticks=max_ticks)).run()
 
 
 if __name__ == "__main__":

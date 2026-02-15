@@ -1,7 +1,9 @@
 param(
   [switch]$HealthOnly,
   [ValidateSet("off", "wait", "fold", "call", "raise", "cycle")]
-  [string]$SimScenario = "off"
+  [string]$SimScenario = "off",
+  [ValidateRange(0, 100000)]
+  [int]$Ticks = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,11 +35,17 @@ if (-not $pythonExe) {
 
 Push-Location $projectRoot
 $_previousSimScenario = $env:TITAN_SIM_SCENARIO
+$_previousMaxTicks = $env:TITAN_MAX_TICKS
 
 try {
   if ($SimScenario -ne "off") {
     $env:TITAN_SIM_SCENARIO = $SimScenario
     Write-Host "[SIM] TITAN_SIM_SCENARIO=$SimScenario"
+  }
+
+  if ($Ticks -gt 0) {
+    $env:TITAN_MAX_TICKS = "$Ticks"
+    Write-Host "[RUN] TITAN_MAX_TICKS=$Ticks"
   }
 
   Write-Host "[1/2] Running healthcheck with: $pythonExe"
@@ -61,6 +69,13 @@ finally {
   }
   else {
     $env:TITAN_SIM_SCENARIO = $_previousSimScenario
+  }
+
+  if ($null -eq $_previousMaxTicks) {
+    Remove-Item Env:TITAN_MAX_TICKS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_MAX_TICKS = $_previousMaxTicks
   }
 
   Pop-Location
