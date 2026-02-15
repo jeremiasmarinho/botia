@@ -78,6 +78,7 @@ Para ver decisões variando no Windows sem visão real, use:
 - `./scripts/run_windows.ps1 -SimScenario cycle`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10`
 - `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -TickSeconds 0.1`
+- `./scripts/run_windows.ps1 -SimScenario cycle -Ticks 10 -ReportDir reports`
 
 Também é possível forçar um cenário específico:
 
@@ -95,6 +96,8 @@ Ao finalizar a execução, o engine imprime um relatório JSON em uma linha:
 - `[Orchestrator] run_report={...}`
 
 Campos atuais: `ticks`, `outcomes`, `average_win_rate`, `action_counts`, `duration_seconds`.
+
+Para persistir em arquivo `.json`, informe `-ReportDir` no script Windows (ou defina `TITAN_REPORT_DIR`).
 
 ## APK Android (PoC)
 

@@ -71,6 +71,24 @@ class Orchestrator:
 
         return action, win_rate
 
+    @staticmethod
+    def _write_report_file(report: dict[str, Any]) -> str | None:
+        report_dir = os.getenv("TITAN_REPORT_DIR", "").strip()
+        if not report_dir:
+            return None
+
+        try:
+            os.makedirs(report_dir, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"run_report_{timestamp}.json"
+            file_path = os.path.join(report_dir, filename)
+            with open(file_path, "w", encoding="utf-8") as report_file:
+                json.dump(report, report_file, ensure_ascii=False, indent=2)
+            return file_path
+        except OSError as error:
+            print(f"[Orchestrator] report_write_error={error}")
+            return None
+
     def run(self) -> None:
         self.bootstrap()
         self._running = True
@@ -121,6 +139,9 @@ class Orchestrator:
                 "duration_seconds": round(duration_seconds, 3),
             }
             print(f"[Orchestrator] run_report={json.dumps(report, ensure_ascii=False)}")
+            report_file = self._write_report_file(report)
+            if report_file is not None:
+                print(f"[Orchestrator] run_report_file={report_file}")
 
     def stop(self) -> None:
         self._running = False

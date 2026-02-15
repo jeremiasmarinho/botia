@@ -5,7 +5,8 @@ param(
   [ValidateRange(0, 100000)]
   [int]$Ticks = 0,
   [ValidateRange(0.05, 10.0)]
-  [double]$TickSeconds = 0.2
+  [double]$TickSeconds = 0.2,
+  [string]$ReportDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,7 @@ Push-Location $projectRoot
 $_previousSimScenario = $env:TITAN_SIM_SCENARIO
 $_previousMaxTicks = $env:TITAN_MAX_TICKS
 $_previousTickSeconds = $env:TITAN_TICK_SECONDS
+$_previousReportDir = $env:TITAN_REPORT_DIR
 
 try {
   if ($SimScenario -ne "off") {
@@ -53,6 +55,17 @@ try {
 
   $env:TITAN_TICK_SECONDS = "$TickSeconds"
   Write-Host "[RUN] TITAN_TICK_SECONDS=$TickSeconds"
+
+  if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
+    if ([System.IO.Path]::IsPathRooted($ReportDir)) {
+      $resolvedReportDir = $ReportDir
+    }
+    else {
+      $resolvedReportDir = Join-Path $projectRoot $ReportDir
+    }
+    $env:TITAN_REPORT_DIR = "$resolvedReportDir"
+    Write-Host "[RUN] TITAN_REPORT_DIR=$resolvedReportDir"
+  }
 
   Write-Host "[1/2] Running healthcheck with: $pythonExe"
   & $pythonExe -m orchestrator.healthcheck
@@ -89,6 +102,13 @@ finally {
   }
   else {
     $env:TITAN_TICK_SECONDS = $_previousTickSeconds
+  }
+
+  if ($null -eq $_previousReportDir) {
+    Remove-Item Env:TITAN_REPORT_DIR -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:TITAN_REPORT_DIR = $_previousReportDir
   }
 
   Pop-Location
