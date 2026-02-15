@@ -71,6 +71,10 @@ Exemplo (PowerShell):
 
 Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código `0`.
 
+## Equity Monte Carlo
+
+`core/math_engine.py` agora usa simulação Monte Carlo com `treys` para estimar `win_rate` e `tie_rate`.
+
 ## Modo simulado (sem YOLO, para teste rápido)
 
 Para ver decisões variando no Windows sem visão real, use:
@@ -120,7 +124,7 @@ Build recomendado via WSL/Linux com Buildozer.
 
 ## Próximos passos sugeridos
 
-1. Trocar heurística do `core/math_engine.py` por Monte Carlo PLO real
+1. Ajustar regras/benchmark de Monte Carlo para PLO em produção
 2. Popular `dead_cards` via memória compartilhada da mesa
 3. Implementar parser de labels YOLO específico do dataset
 4. Implementar política avançada no `workflows/poker_hand_workflow.py`
