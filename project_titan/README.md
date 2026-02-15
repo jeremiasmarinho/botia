@@ -259,6 +259,30 @@ Para calibrar por pote multiway, use `-Opponents` (`1..9`).
 
 Para balancear precisão vs velocidade do equity, use `-Simulations` (`100..100000`).
 
+## Profiling da visão (30 FPS)
+
+Para medir latência e throughput do pipeline de visão em carga controlada:
+
+- `./scripts/vision_profile.ps1 -Frames 300 -TargetFps 30 -ReportDir reports`
+- `./scripts/vision_profile.ps1 -Frames 300 -TargetFps 30 -NoSamples -Json`
+
+O utilitário executa leituras do `VisionTool`, calcula métricas de latência (`avg`, `p50`, `p95`, `max`), FPS alcançado e taxa de `state_changed` / `is_my_turn`.
+
+Também salva relatório em `reports/vision_profile_*.json` para comparação histórica.
+
+Comparar automaticamente os 2 últimos perfis com alerta de regressão de `p95`:
+
+- `./scripts/vision_profile_compare.ps1 -ReportDir reports`
+- `./scripts/vision_profile_compare.ps1 -ReportDir reports -P95RegressionThresholdPct 20 -FailOnRegression`
+- `./scripts/vision_profile_compare.ps1 -ReportDir reports -Json -SaveCompare -SaveLatest`
+
+Payload CI-ready do comparativo inclui:
+
+- `status`: `pass|fail`
+- `ci.exit_code`: código de saída efetivo considerando `-FailOnRegression`
+- `ci.should_fail`: booleano para consumo por pipelines
+- `latest_file`: caminho do arquivo estável (quando `-SaveLatest`)
+
 Para ajuste automático por street (preflop/flop/turn/river), use `-DynamicSimulations`.
 
 Para benchmark rápido A/B/C por perfil (`tight`, `normal`, `aggressive`), use `-ProfileSweep`.
@@ -306,9 +330,23 @@ Para validar rapidamente regressão de sweep (ProfileSweep + PositionSweep + ger
 
 - `./scripts/smoke_sweep.ps1 -ReportDir reports`
 
+Para validar profiling de visão + comparação histórica (`vision_profile` + `vision_profile_compare`), use:
+
+- `./scripts/smoke_vision_profile.ps1 -ReportDir reports`
+
+Para gerar resumo consolidado único dos checks de smoke (sem reexecutar tudo), use:
+
+- `./scripts/smoke_health_summary.ps1 -ReportDir reports`
+- `./scripts/smoke_health_summary.ps1 -ReportDir reports -Json`
+
 Para rodar baseline + sweep em uma única execução (status único para CI), use:
 
 - `./scripts/smoke_all.ps1 -ReportDir reports`
+
+Ao final, o `smoke_all.ps1` também gera resumo consolidado em:
+
+- `reports/smoke_health_latest.json` (arquivo estável para CI/dashboard)
+- `reports/smoke_health_*.json` (histórico timestampado)
 
 Para validar integração multi-agente (HiveBrain + 2 agentes + protocolo squad), use:
 
@@ -321,6 +359,18 @@ O `smoke_all.ps1` agora inclui automaticamente o `smoke_squad.ps1`.
 Workflow pronto em [../.github/workflows/project_titan_smoke.yml](../.github/workflows/project_titan_smoke.yml).
 
 Ele roda no `windows-latest`, instala dependências de `requirements.txt`, executa `smoke_all.ps1` e publica `project_titan/reports` como artifact.
+
+O job `smoke` também exporta outputs para automação:
+
+- `overall_status`
+- `vision_compare_status`
+- `health_file`
+
+Além disso, escreve um resumo no `GITHUB_STEP_SUMMARY` com status consolidado do smoke health.
+
+O job `gate` bloqueia merge quando `overall_status != pass`.
+
+No `workflow_dispatch`, é possível ativar modo estrito de visão com input `strict_vision_gate=true`, que também falha o gate quando `vision_compare_status != pass`.
 
 Quando o passo de smoke falha, o workflow também gera automaticamente um `ci_debug_bundle_*.zip` dentro de `reports` para facilitar troubleshooting no artifact.
 
@@ -338,7 +388,7 @@ Para exigir o smoke no merge para `main`:
 2. Em `Branch protection rules`, crie/edite a regra para `main`.
 3. Ative `Require a pull request before merging`.
 4. Ative `Require status checks to pass before merging`.
-5. Em checks obrigatórios, selecione o job `smoke` do workflow `Project Titan Smoke`.
+5. Em checks obrigatórios, selecione os jobs `smoke` e `gate` do workflow `Project Titan Smoke`.
 
 Opcional (mais rígido):
 
@@ -352,11 +402,13 @@ Antes de abrir/mesclar PR em `main`, use este checklist:
 
 - [ ] `./scripts/smoke_baseline.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_sweep.ps1 -ReportDir reports` executou com sucesso.
+- [ ] `./scripts/smoke_vision_profile.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_squad.ps1 -ReportDir reports` executou com sucesso.
 - [ ] `./scripts/smoke_all.ps1 -ReportDir reports` executou com sucesso.
 - [ ] Workflow `Project Titan Smoke` passou no PR.
+- [ ] Job `gate` do workflow `Project Titan Smoke` passou no PR.
 - [ ] Arquivos de documentação afetados foram atualizados (`README`, scripts).
-- [ ] Regra de branch protection com check obrigatório `smoke` está ativa em `main`.
+- [ ] Regra de branch protection com checks obrigatórios `smoke` e `gate` está ativa em `main`.
 
 Template de PR disponível em [../.github/PULL_REQUEST_TEMPLATE.md](../.github/PULL_REQUEST_TEMPLATE.md).
 
@@ -502,7 +554,7 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 2. Calibrar GhostMouse com coordenadas reais do emulador
 3. Teste end-to-end com emulador real + modelo YOLO treinado
 4. Dashboard web para monitoramento em tempo real (mesas, agentes, RNG flags)
-5. Profiling de performance do pipeline de visão a 30 FPS sob carga real
+5. Telemetria contínua de produção (histórico de profiling + alertas de regressão)
 
 ### Funcionalidades já implementadas
 
@@ -519,3 +571,4 @@ O servidor ZMQ agora reconecta automaticamente em caso de erro de socket:
 - [x] Smoke test de squad (multi-agente + HiveBrain)
 - [x] CI/CD com GitHub Actions
 - [x] Utilitário operacional de cache de calibração
+- [x] Profiling de performance do pipeline de visão a 30 FPS

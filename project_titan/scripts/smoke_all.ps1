@@ -36,9 +36,18 @@ Invoke-CheckedCommand -Label "Sweep smoke" -Command {
   powershell -ExecutionPolicy Bypass -File .\scripts\smoke_sweep.ps1 -ReportDir $resolvedReportDir
 } | Out-Null
 
+Invoke-CheckedCommand -Label "Vision profile smoke" -Command {
+  powershell -ExecutionPolicy Bypass -File .\scripts\smoke_vision_profile.ps1 -ReportDir $resolvedReportDir
+} | Out-Null
+
 Invoke-CheckedCommand -Label "Squad smoke" -Command {
   powershell -ExecutionPolicy Bypass -File .\scripts\smoke_squad.ps1 -ReportDir $resolvedReportDir
 } | Out-Null
 
 $duration = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 2)
+
+Invoke-CheckedCommand -Label "Smoke health summary" -Command {
+  powershell -ExecutionPolicy Bypass -File .\scripts\smoke_health_summary.ps1 -ReportDir $resolvedReportDir -DurationSeconds $duration
+} | Out-Null
+
 Write-Host "[SMOKE-ALL] OK duration_seconds=$duration report_dir=$resolvedReportDir"

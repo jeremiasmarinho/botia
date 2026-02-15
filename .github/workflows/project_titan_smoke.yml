@@ -2,6 +2,15 @@ name: Project Titan Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      strict_vision_gate:
+        description: "Fail gate when vision_compare_status is not pass"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   push:
     branches: [main]
     paths:
@@ -16,6 +25,10 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
+    outputs:
+      overall_status: ${{ steps.health.outputs.overall_status }}
+      vision_compare_status: ${{ steps.health.outputs.vision_compare_status }}
+      health_file: ${{ steps.health.outputs.health_file }}
     defaults:
       run:
         shell: pwsh
@@ -41,6 +54,36 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File .\scripts\smoke_all.ps1 -ReportDir reports
 
+      - name: Extract smoke health outputs
+        id: health
+        if: always()
+        run: |
+          $healthFile = Join-Path $PWD "reports\smoke_health_latest.json"
+          if (-not (Test-Path $healthFile)) {
+            "overall_status=unknown" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "vision_compare_status=unknown" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "health_file=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "## Project Titan Smoke Health" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "- overall_status: unknown (arquivo não encontrado)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit 0
+          }
+
+          $health = Get-Content -Path $healthFile -Raw | ConvertFrom-Json
+          $overallStatus = if ($null -eq $health.overall_status) { "unknown" } else { [string]$health.overall_status }
+          $visionStatus = "unknown"
+          if ($null -ne $health.checks -and $null -ne $health.checks.vision_profile -and $null -ne $health.checks.vision_profile.compare_status) {
+            $visionStatus = [string]$health.checks.vision_profile.compare_status
+          }
+
+          "overall_status=$overallStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "vision_compare_status=$visionStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "health_file=$healthFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          "## Project Titan Smoke Health" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- overall_status: $overallStatus" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- vision_compare_status: $visionStatus" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- health_file: $healthFile" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Build CI debug bundle on failure
         if: failure()
         run: |
@@ -53,3 +96,47 @@ jobs:
           name: project-titan-reports
           path: project_titan/reports/
           if-no-files-found: ignore
+
+  gate:
+    runs-on: ubuntu-latest
+    needs: smoke
+    if: always()
+    env:
+      STRICT_VISION_GATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.strict_vision_gate || 'false' }}
+    steps:
+      - name: Evaluate smoke policy gate
+        run: |
+          OVERALL_STATUS="${{ needs.smoke.outputs.overall_status }}"
+          VISION_STATUS="${{ needs.smoke.outputs.vision_compare_status }}"
+          HEALTH_FILE="${{ needs.smoke.outputs.health_file }}"
+          STRICT_VISION="$STRICT_VISION_GATE"
+
+          if [ -z "$OVERALL_STATUS" ]; then
+            OVERALL_STATUS="unknown"
+          fi
+          if [ -z "$VISION_STATUS" ]; then
+            VISION_STATUS="unknown"
+          fi
+          if [ -z "$STRICT_VISION" ]; then
+            STRICT_VISION="false"
+          fi
+
+          {
+            echo "## Project Titan Smoke Gate"
+            echo "- overall_status: $OVERALL_STATUS"
+            echo "- vision_compare_status: $VISION_STATUS"
+            echo "- strict_vision_gate: $STRICT_VISION"
+            echo "- health_file: $HEALTH_FILE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$OVERALL_STATUS" != "pass" ]; then
+            echo "Gate failed: overall_status=$OVERALL_STATUS"
+            exit 1
+          fi
+
+          if [ "$STRICT_VISION" = "true" ] && [ "$VISION_STATUS" != "pass" ]; then
+            echo "Gate failed: strict vision mode enabled and vision_compare_status=$VISION_STATUS"
+            exit 1
+          fi
+
+          echo "Gate passed: overall_status=pass"
