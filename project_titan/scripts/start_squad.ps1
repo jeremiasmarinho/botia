@@ -24,7 +24,9 @@ param(
     [string]$TableId = "table_alpha",
     [int]$MaxCycles = 0,
     [string]$SimScenario = "",
-    [switch]$UseMockVision
+    [switch]$UseMockVision,
+    [switch]$CollectData,
+    [switch]$EnduranceMode
 )
 
 Set-StrictMode -Version Latest
@@ -54,6 +56,8 @@ Write-Host "Agents   : $Agents"
 Write-Host "Table    : $TableId"
 Write-Host "MaxCycles: $(if ($MaxCycles -gt 0) { $MaxCycles } else { 'unlimited' })"
 Write-Host "MockVision: $(if ($UseMockVision) { 'ON' } else { 'OFF' })"
+Write-Host "CollectData: $(if ($CollectData) { 'ON' } else { 'OFF' })"
+Write-Host "Endurance : $(if ($EnduranceMode) { 'ON' } else { 'OFF' })"
 Write-Host ""
 
 # -------------------------------------------------------------------
@@ -64,6 +68,16 @@ $agentEnv["TITAN_TABLE_ID"] = $TableId
 if ($MaxCycles -gt 0) { $agentEnv["TITAN_AGENT_MAX_CYCLES"] = "$MaxCycles" }
 if ($SimScenario) { $agentEnv["TITAN_SIM_SCENARIO"] = $SimScenario }
 
+if ($EnduranceMode) {
+    if ($MaxCycles -le 0) {
+        $agentEnv["TITAN_AGENT_MAX_CYCLES"] = "100"
+    }
+    if (-not $agentEnv.ContainsKey("TITAN_SIM_SCENARIO")) {
+        $agentEnv["TITAN_SIM_SCENARIO"] = ""
+    }
+    $agentEnv["TITAN_MOCK_SCENARIO"] = "ALT"
+}
+
 if ($UseMockVision) {
     $env:TITAN_USE_MOCK_VISION = "1"
     $agentEnv["TITAN_USE_MOCK_VISION"] = "1"
@@ -73,6 +87,20 @@ else {
     $env:TITAN_USE_MOCK_VISION = "0"
     if ($agentEnv.ContainsKey("TITAN_USE_MOCK_VISION")) {
         $agentEnv.Remove("TITAN_USE_MOCK_VISION")
+    }
+}
+
+if ($CollectData) {
+    $env:TITAN_COLLECT_DATA = "1"
+    $agentEnv["TITAN_COLLECT_DATA"] = "1"
+    $rawDataDir = Join-Path $ProjectDir "data\raw"
+    New-Item -Path $rawDataDir -ItemType Directory -Force | Out-Null
+    Write-Host "MODO DE COLETA ATIVO: SPIYING ON" -ForegroundColor Cyan
+}
+else {
+    $env:TITAN_COLLECT_DATA = "0"
+    if ($agentEnv.ContainsKey("TITAN_COLLECT_DATA")) {
+        $agentEnv.Remove("TITAN_COLLECT_DATA")
     }
 }
 

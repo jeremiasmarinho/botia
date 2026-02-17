@@ -20,3 +20,4 @@ reports/logs/
 reports/logs_endurance/
 reports/logs_mock_cycle/
 reports/logs_mock_e2e/
+data/raw/

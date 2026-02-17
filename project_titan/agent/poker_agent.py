@@ -562,8 +562,9 @@ class PokerAgent:
             snapshot = self.vision.read_table()
             self._log_seen_cards(_log, list(getattr(snapshot, "hero_cards", [])))
 
+            current_ocr_frame = self.ocr_vision.capture_frame()
+
             if not self._use_mock_vision:
-                current_ocr_frame = self.ocr_vision.capture_frame()
                 if current_ocr_frame is None:
                     time.sleep(max(0.1, float(self.config.interval_seconds)))
                     continue

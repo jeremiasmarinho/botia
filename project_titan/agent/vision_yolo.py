@@ -40,6 +40,7 @@ Variáveis de ambiente
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -507,6 +508,13 @@ class VisionYolo:
         self._model: Any = None
         self._model_loaded: bool = False
         self._model_error: str = ""
+        self.last_frame_hash: str = ""
+
+        collect_raw_dir = os.getenv("TITAN_COLLECT_DATA_DIR", "").strip()
+        if collect_raw_dir:
+            self._collect_data_dir = collect_raw_dir
+        else:
+            self._collect_data_dir = os.path.join("data", "raw")
 
     # -- Localização da janela (delegada ao EmulatorWindow) -----------------
 
@@ -635,6 +643,38 @@ class VisionYolo:
         except Exception as err:
             self._save_debug_note(reason, detail=f"save_error={err}")
 
+    def _collect_frame_if_enabled(self, frame: Any) -> None:
+        if os.getenv("TITAN_COLLECT_DATA", "0").strip() != "1":
+            return
+        if frame is None or np is None:
+            return
+        try:
+            frame_hash = hashlib.md5(frame.tobytes()).hexdigest()
+        except Exception:
+            return
+        if frame_hash == self.last_frame_hash:
+            return
+
+        self.last_frame_hash = frame_hash
+
+        try:
+            os.makedirs(self._collect_data_dir, exist_ok=True)
+        except Exception:
+            return
+
+        timestamp = int(time.time() * 1000)
+        filename = f"{timestamp}_{frame_hash[:12]}.png"
+        filepath = os.path.join(self._collect_data_dir, filename)
+
+        try:
+            if _cv2_module is not None:
+                _cv2_module.imwrite(filepath, frame)
+            else:
+                return
+            print(f"[VISION] Frame changed. Snapshot saved: {filepath}")
+        except Exception:
+            return
+
     # -- Captura de tela (ROI apenas) ---------------------------------------
 
     def capture_frame(self) -> Any:
@@ -675,6 +715,7 @@ class VisionYolo:
                 raw = sct.grab(roi_region)
                 # mss retorna BGRA; remove canal alpha → BGR para YOLO
                 frame = np.array(raw)[:, :, :3]
+                self._collect_frame_if_enabled(frame)
                 return frame
         except Exception:
             return None
@@ -692,6 +733,12 @@ class VisionYolo:
         ``self.to_screen_coords(det.cx, det.cy)`` para converter para
         coordenadas absolutas do monitor.
         """
+        # Captura frame da ROI do jogo
+        frame = self.capture_frame()
+        if frame is None:
+            self._save_debug_note("capture_failed")
+            return DetectionFrame(timestamp=time.perf_counter())
+
         # Garante que o modelo está carregado
         if not self._load_model():
             self._save_debug_note("model_not_loaded")
@@ -699,12 +746,6 @@ class VisionYolo:
             if fail_fast:
                 detail = self._model_error or "falha ao carregar modelo"
                 raise RuntimeError(f"VisionYolo fail-fast: {detail}")
-            return DetectionFrame(timestamp=time.perf_counter())
-
-        # Captura frame da ROI do jogo
-        frame = self.capture_frame()
-        if frame is None:
-            self._save_debug_note("capture_failed")
             return DetectionFrame(timestamp=time.perf_counter())
 
         height, width = frame.shape[:2]
