@@ -54,6 +54,11 @@ except Exception:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
 try:
+    import cv2 as _cv2_module  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover
+    _cv2_module = None  # type: ignore[assignment]
+
+try:
     import mss as _mss_module
 except Exception:  # pragma: no cover
     _mss_module = None  # type: ignore[assignment]
@@ -697,6 +702,47 @@ class VisionYolo:
             window_left=self.offset_x,
             window_top=self.offset_y,
         )
+
+    @staticmethod
+    def check_screen_stability(
+        frame_a: Any,
+        frame_b: Any,
+        threshold: float = 0.01,
+    ) -> bool:
+        """Retorna ``True`` quando dois frames estão visualmente estáveis.
+
+        Usa ``cv2.absdiff`` em versão reduzida (grayscale downsampled)
+        para manter custo computacional baixo.
+        """
+        if frame_a is None or frame_b is None:
+            return False
+        if np is None:
+            return True
+
+        try:
+            if frame_a.shape != frame_b.shape:
+                return False
+
+            if _cv2_module is None:
+                diff = np.abs(frame_a.astype("int16") - frame_b.astype("int16"))
+                motion_ratio = float(np.count_nonzero(diff > 12)) / float(diff.size)
+                return motion_ratio <= max(0.0, float(threshold))
+
+            cv2 = _cv2_module
+            gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY) if len(frame_a.shape) == 3 else frame_a
+            gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY) if len(frame_b.shape) == 3 else frame_b
+
+            target_w = min(320, int(gray_a.shape[1]))
+            target_h = max(1, int(gray_a.shape[0] * (target_w / max(1, gray_a.shape[1]))))
+            small_a = cv2.resize(gray_a, (target_w, target_h), interpolation=cv2.INTER_AREA)
+            small_b = cv2.resize(gray_b, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+            diff = cv2.absdiff(small_a, small_b)
+            _, motion_mask = cv2.threshold(diff, 18, 255, cv2.THRESH_BINARY)
+            motion_ratio = float(cv2.countNonZero(motion_mask)) / float(motion_mask.size)
+            return motion_ratio <= max(0.0, float(threshold))
+        except Exception:
+            return False
 
     # -- Utilitários --------------------------------------------------------
 

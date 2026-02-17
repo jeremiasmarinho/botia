@@ -34,6 +34,7 @@ import time
 from typing import Any
 
 from memory.redis_memory import RedisMemory
+from agent.sanity_guard import SanityGuard
 from agent.vision_ocr import TitanOCR
 from agent.vision_yolo import VisionYolo
 from tools.action_tool import ActionTool
@@ -140,6 +141,24 @@ class PokerAgent:
             min_value=1,
             max_value=5,
         )
+        self._screen_stability_threshold = clamp_float(
+            parse_float_env("TITAN_SCREEN_STABILITY_THRESHOLD", 0.01),
+            min_value=0.0001,
+            max_value=0.50,
+        )
+        self._prev_ocr_frame: Any | None = None
+        self.sanity_guard = SanityGuard(
+            history_size=clamp_int(
+                parse_int_env("TITAN_SANITY_HISTORY_SIZE", 5),
+                min_value=3,
+                max_value=10,
+            ),
+            stable_frames=clamp_int(
+                parse_int_env("TITAN_SANITY_STABLE_FRAMES", 3),
+                min_value=2,
+                max_value=5,
+            ),
+        )
 
         self.equity = EquityTool()
         self.action = ActionTool()
@@ -177,6 +196,12 @@ class PokerAgent:
             return dict(self._ocr_last_values)
 
         frame = self.ocr_vision.capture_frame()
+        if frame is None:
+            return dict(self._ocr_last_values)
+        return self._read_ocr_metrics_from_frame(frame)
+
+    def _read_ocr_metrics_from_frame(self, frame: Any) -> dict[str, float]:
+        """Read OCR metrics from a pre-captured frame."""
         if frame is None:
             return dict(self._ocr_last_values)
 
@@ -451,11 +476,39 @@ class PokerAgent:
         while True:
             snapshot = self.vision.read_table()
 
+            current_ocr_frame = self.ocr_vision.capture_frame()
+            if current_ocr_frame is None:
+                time.sleep(max(0.1, float(self.config.interval_seconds)))
+                continue
+
+            if self._prev_ocr_frame is not None:
+                is_stable = self.ocr_vision.check_screen_stability(
+                    self._prev_ocr_frame,
+                    current_ocr_frame,
+                    threshold=self._screen_stability_threshold,
+                )
+                if not is_stable:
+                    self._prev_ocr_frame = current_ocr_frame
+                    _log.info("screen_stable=0 ocr_skipped=1")
+                    time.sleep(max(0.1, float(self.config.interval_seconds)))
+                    continue
+
+            self._prev_ocr_frame = current_ocr_frame
+
             # OCR enrichment: numeric table state (pot / stack / call)
-            ocr_metrics = self._read_ocr_metrics()
+            ocr_metrics = self._read_ocr_metrics_from_frame(current_ocr_frame)
             ocr_pot = float(ocr_metrics.get("pot", 0.0))
             ocr_stack = float(ocr_metrics.get("hero_stack", 0.0))
             ocr_call = float(ocr_metrics.get("call_amount", 0.0))
+
+            if not self.sanity_guard.validate(ocr_pot, ocr_stack, ocr_call):
+                _log.info(
+                    "sanity_ok=0 "
+                    f"reason={self.sanity_guard.last_reason} "
+                    f"pot={ocr_pot:.2f} stack={ocr_stack:.2f} call={ocr_call:.2f}"
+                )
+                time.sleep(max(0.1, float(self.config.interval_seconds)))
+                continue
 
             if ocr_pot > 0:
                 snapshot.pot = ocr_pot
