@@ -81,10 +81,29 @@ class Orchestrator:
         self.registry.register_agent("zombie_01", agent)
 
     @staticmethod
-    def _parse_outcome_metrics(outcome: str) -> tuple[str | None, float | None]:
-        """Extract ``action`` and ``win_rate`` from a free-form outcome string."""
+    def _parse_outcome_metrics(outcome: Any) -> tuple[str | None, float | None]:
+        """Extract ``action`` and ``win_rate`` from string or Decision payloads."""
         action: str | None = None
         win_rate: float | None = None
+
+        if hasattr(outcome, "action"):
+            raw_action = getattr(outcome, "action", None)
+            if isinstance(raw_action, str) and raw_action.strip():
+                action = raw_action.strip().lower()
+
+            raw_equity = getattr(outcome, "equity", None)
+            if isinstance(raw_equity, (int, float)):
+                win_rate = float(raw_equity)
+            elif isinstance(raw_equity, str):
+                try:
+                    win_rate = float(raw_equity.strip())
+                except ValueError:
+                    win_rate = None
+
+            return action, win_rate
+
+        if not isinstance(outcome, str):
+            return None, None
 
         for token in outcome.split():
             if token.startswith("action="):
@@ -101,6 +120,23 @@ class Orchestrator:
                     win_rate = None
 
         return action, win_rate
+
+    @staticmethod
+    def _format_outcome_for_log(outcome: Any) -> str:
+        """Render workflow outcome for console logs."""
+        if hasattr(outcome, "action"):
+            action = getattr(outcome, "action", "wait")
+            amount = getattr(outcome, "amount", 0.0)
+            equity = getattr(outcome, "equity", 0.0)
+            spr = getattr(outcome, "spr", 99.0)
+            mode = getattr(outcome, "mode", "SOLO")
+            committed = getattr(outcome, "committed", False)
+            description = getattr(outcome, "description", "")
+            return (
+                f"action={action} amount={amount} equity={equity:.4f} "
+                f"spr={spr} mode={mode} committed={committed} desc={description}"
+            )
+        return str(outcome)
 
     @staticmethod
     def _extract_simulations_from_decision(last_decision: Any) -> tuple[int | None, bool | None]:
@@ -169,7 +205,7 @@ class Orchestrator:
                     outcome = agent.step()
                     if outcome is not None:
                         total_outcomes += 1
-                        _log.status(f"{agent_name}: {outcome}")
+                        _log.status(f"{agent_name}: {self._format_outcome_for_log(outcome)}")
 
                         action, win_rate = self._parse_outcome_metrics(outcome)
                         if action is not None:

@@ -9,13 +9,14 @@ without side effects.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from typing import Protocol
 
 
 class SupportsStep(Protocol):
     """Structural protocol for any object that exposes an ``execute`` method."""
 
-    def execute(self) -> str: ...
+    def execute(self) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -24,6 +25,6 @@ class ZombieAgent:
 
     workflow: SupportsStep
 
-    def step(self) -> str:
-        """Run the workflow once and return its outcome string."""
+    def step(self) -> Any:
+        """Run the workflow once and return its outcome payload."""
         return self.workflow.execute()

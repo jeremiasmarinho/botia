@@ -1,0 +1,8 @@
+pytest>=8.2
+numpy>=1.26
+scipy>=1.11
+pyzmq>=26.0
+redis>=5.0
+treys>=0.1.8
+mss>=9.0
+pyyaml>=6.0

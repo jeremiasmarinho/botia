@@ -1,0 +1,49 @@
+name: Project Titan CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "project_titan/**"
+      - "pyrightconfig.json"
+      - ".github/workflows/project_titan_ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "project_titan/**"
+      - "pyrightconfig.json"
+      - ".github/workflows/project_titan_ci.yml"
+  workflow_dispatch:
+
+jobs:
+  tests-and-types:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: project_titan
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: project_titan/requirements-ci.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+
+      - name: Run unit tests
+        run: |
+          pytest -q tests
+
+      - name: Run pyright
+        run: |
+          python -m pip install pyright
+          pyright ../project_titan

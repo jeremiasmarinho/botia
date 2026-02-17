@@ -180,11 +180,11 @@ def _run_cycle(
         pot_odds = float(result.get("pot_odds", 0.0))
     elif hasattr(result, "action"):
         action = getattr(result, "action", "wait")
-        win_rate = float(getattr(result, "win_rate", 0.0))
+        win_rate = float(getattr(result, "equity", 0.0))
         pot_odds = float(getattr(result, "pot_odds", 0.0))
 
     # 4. Execute action
-    action_summary = action_tool.act(action, street)
+    action_summary = action_tool.act("raise_big" if action == "all_in" else action, street)
 
     # Parse delay from action summary
     delay = 0.0
@@ -343,7 +343,7 @@ def _run_e2e(args: argparse.Namespace) -> E2EReport:
             cycles.append(result)
 
             # A cycle passes if it produced a valid action
-            if result.action in ("fold", "call", "raise_small", "raise_big", "wait"):
+            if result.action in ("fold", "call", "raise_small", "raise_big", "all_in", "wait"):
                 pass_count += 1
             else:
                 fail_count += 1

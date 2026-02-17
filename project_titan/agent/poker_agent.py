@@ -361,7 +361,10 @@ class PokerAgent:
             if isinstance(snapshot.current_opponent, str) and snapshot.current_opponent.strip():
                 self.memory.set("current_opponent", snapshot.current_opponent.strip())
 
-            outcome = self.workflow.execute(snapshot=snapshot)
+            outcome = self.workflow.execute(
+                snapshot=snapshot,
+                hive_data=response,
+            )
 
             log_method = _log.highlight if mode == "squad" else _log.info
             log_method(
@@ -370,7 +373,11 @@ class PokerAgent:
                 f"hu_obf={heads_up_obfuscation} latency_ms={latency_ms} "
                 f"my_turn={snapshot.is_my_turn} state_changed={snapshot.state_changed} "
                 f"action_points={list(effective_action_points.keys())} "
-                f"action_calibration={action_calibration_source} outcome={outcome}"
+                f"action_calibration={action_calibration_source} "
+                f"decision={outcome.action} amount={outcome.amount} "
+                f"equity={outcome.equity} spr={outcome.spr} "
+                f"mode={outcome.mode} committed={outcome.committed} "
+                f"desc={outcome.description}"
             )
 
             if heads_up_obfuscation:

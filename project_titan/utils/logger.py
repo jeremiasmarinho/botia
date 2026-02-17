@@ -7,8 +7,10 @@ Falls back to plain text when the terminal does not support ANSI or when
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from datetime import datetime, timezone
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +59,25 @@ def _supports_color() -> bool:
 _COLOR_ENABLED = _supports_color()
 
 
+def _log_file_path() -> str | None:
+    """Resolve JSONL log destination from env vars.
+
+    ``TITAN_LOG_DIR`` controls the folder; defaults to ``reports/logs``.
+    Set ``TITAN_LOG_FILE=0`` to disable file logging.
+    """
+    if os.getenv("TITAN_LOG_FILE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    log_dir = os.getenv("TITAN_LOG_DIR", os.path.join("reports", "logs")).strip()
+    if not log_dir:
+        return None
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        return None
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return os.path.join(log_dir, f"titan_{timestamp}.jsonl")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -80,6 +101,23 @@ class TitanLogger:
     def __init__(self, module: str) -> None:
         self.module = module
         self._prefix_color = self._MODULE_COLORS.get(module, _FG_WHITE)
+        self._log_file = _log_file_path()
+
+    def _write_file_log(self, level: str, message: str) -> None:
+        """Append structured log event to JSONL file."""
+        if self._log_file is None:
+            return
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "module": self.module,
+            "level": level,
+            "message": message,
+        }
+        try:
+            with open(self._log_file, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except OSError:
+            return
 
     def _format(self, level_color: str, level: str, message: str) -> str:
         if _COLOR_ENABLED:
@@ -90,19 +128,24 @@ class TitanLogger:
         return f"[{self.module}] {level} {message}"
 
     def info(self, message: str) -> None:
+        self._write_file_log("INFO", message)
         print(self._format(_FG_GREEN, ">", message))
 
     def success(self, message: str) -> None:
+        self._write_file_log("SUCCESS", message)
         print(self._format(_FG_BRIGHT_GREEN, "+", message))
 
     def warn(self, message: str) -> None:
+        self._write_file_log("WARN", message)
         print(self._format(_FG_YELLOW, "!", message))
 
     def error(self, message: str) -> None:
+        self._write_file_log("ERROR", message)
         print(self._format(_FG_RED, "X", message))
 
     def status(self, message: str) -> None:
         """Dimmed status line for non-critical events."""
+        self._write_file_log("STATUS", message)
         if _COLOR_ENABLED:
             print(f"{self._prefix_color}{_BOLD}[{self.module}]{_RESET} {_DIM}{message}{_RESET}")
         else:
@@ -110,6 +153,7 @@ class TitanLogger:
 
     def highlight(self, message: str) -> None:
         """Bold bright message (mode activations, demos)."""
+        self._write_file_log("HIGHLIGHT", message)
         if _COLOR_ENABLED:
             print(f"{self._prefix_color}{_BOLD}[{self.module}] * {message}{_RESET}")
         else:
