@@ -134,6 +134,12 @@ class PokerAgent:
             "hero_stack": 0.0,
             "call_amount": 0.0,
         }
+        self._ocr_pending_values: dict[str, tuple[float, int]] = {}
+        self._ocr_confirm_frames = clamp_int(
+            parse_int_env("TITAN_OCR_CONFIRM_FRAMES", 2),
+            min_value=1,
+            max_value=5,
+        )
 
         self.equity = EquityTool()
         self.action = ActionTool()
@@ -208,7 +214,24 @@ class PokerAgent:
         max_delta = float(deltas.get(key, 0.0))
         if max_delta > 0 and safe_previous > 0:
             if abs(safe_candidate - safe_previous) > max_delta:
+                pending_value, pending_count = self._ocr_pending_values.get(
+                    key,
+                    (safe_candidate, 0),
+                )
+                pending_epsilon = max(1.0, max_delta * 0.10)
+                if abs(pending_value - safe_candidate) <= pending_epsilon:
+                    pending_count += 1
+                else:
+                    pending_value = safe_candidate
+                    pending_count = 1
+
+                self._ocr_pending_values[key] = (pending_value, pending_count)
+                if pending_count >= self._ocr_confirm_frames:
+                    self._ocr_pending_values.pop(key, None)
+                    return pending_value
                 return safe_previous
+
+        self._ocr_pending_values.pop(key, None)
 
         return safe_candidate
 
