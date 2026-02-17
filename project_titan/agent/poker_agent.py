@@ -208,6 +208,12 @@ class PokerAgent:
         safe_candidate = max(0.0, float(candidate))
         safe_previous = max(0.0, float(previous))
 
+        if key == "pot" and safe_candidate <= 1.0:
+            return safe_previous if safe_previous > 0 else 0.0
+
+        if key == "hero_stack" and safe_previous >= 50.0 and safe_candidate <= 5.0:
+            return safe_previous
+
         if safe_candidate < min_value or safe_candidate > max_value:
             return safe_previous
 

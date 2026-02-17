@@ -80,7 +80,7 @@ class OCRRuntimeConfig:
     call_max: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_CALL_MAX", "50000")))
 
     pot_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_POT_MAX_DELTA", "25000")))
-    stack_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_STACK_MAX_DELTA", "75000")))
+    stack_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_STACK_MAX_DELTA", "10000")))
     call_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_CALL_MAX_DELTA", "5000")))
 
     @staticmethod
