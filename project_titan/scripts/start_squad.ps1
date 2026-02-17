@@ -26,7 +26,8 @@ param(
     [string]$SimScenario = "",
     [switch]$UseMockVision,
     [switch]$CollectData,
-    [switch]$EnduranceMode
+    [switch]$EnduranceMode,
+    [switch]$Overlay
 )
 
 Set-StrictMode -Version Latest
@@ -58,6 +59,7 @@ Write-Host "MaxCycles: $(if ($MaxCycles -gt 0) { $MaxCycles } else { 'unlimited'
 Write-Host "MockVision: $(if ($UseMockVision) { 'ON' } else { 'OFF' })"
 Write-Host "CollectData: $(if ($CollectData) { 'ON' } else { 'OFF' })"
 Write-Host "Endurance : $(if ($EnduranceMode) { 'ON' } else { 'OFF' })"
+Write-Host "Overlay   : $(if ($Overlay) { 'ON' } else { 'OFF' })"
 Write-Host ""
 
 # -------------------------------------------------------------------
@@ -101,6 +103,18 @@ else {
     $env:TITAN_COLLECT_DATA = "0"
     if ($agentEnv.ContainsKey("TITAN_COLLECT_DATA")) {
         $agentEnv.Remove("TITAN_COLLECT_DATA")
+    }
+}
+
+if ($Overlay) {
+    $env:TITAN_OVERLAY_ENABLED = "1"
+    $agentEnv["TITAN_OVERLAY_ENABLED"] = "1"
+    Write-Host "VISAO DO EXTERMINADOR ATIVA" -ForegroundColor Magenta
+}
+else {
+    $env:TITAN_OVERLAY_ENABLED = "0"
+    if ($agentEnv.ContainsKey("TITAN_OVERLAY_ENABLED")) {
+        $agentEnv.Remove("TITAN_OVERLAY_ENABLED")
     }
 }
 

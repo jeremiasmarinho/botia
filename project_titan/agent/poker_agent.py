@@ -41,9 +41,11 @@ from agent.vision_yolo import VisionYolo
 from tools.action_tool import ActionTool
 from tools.equity_tool import EquityTool
 from tools.rng_tool import RngTool
+from tools.terminator_vision import TerminatorVision
 from tools.vision_tool import VisionTool
 from utils.config import AgentRuntimeConfig, OCRRuntimeConfig, VisionRuntimeConfig
 from utils.logger import TitanLogger
+from utils.titan_config import cfg
 from workflows.poker_hand_workflow import PokerHandWorkflow
 
 from agent.agent_config import (
@@ -172,6 +174,18 @@ class PokerAgent:
         self.workflow = PokerHandWorkflow(
             self.vision, self.equity, self.action, self.memory, self.rng,
         )
+
+        # ── Visual Overlay ("Visão do Exterminador") ───────────────
+        overlay_enabled = parse_bool_env(
+            "TITAN_OVERLAY_ENABLED",
+            cfg.get_bool("overlay.enabled", False),
+        )
+        self._overlay: TerminatorVision | None = None
+        if overlay_enabled:
+            self._overlay = TerminatorVision(
+                max_fps=cfg.get_int("overlay.max_fps", 10),
+                hud_width=cfg.get_int("overlay.hud_width", 320),
+            )
 
         # Restore calibration from file on startup
         self._restore_action_calibration_file_cache()
@@ -555,6 +569,10 @@ class PokerAgent:
             f"table={self.config.table_id}  memory={self.memory.backend}"
         )
 
+        # Inicia overlay se habilitado
+        if self._overlay is not None:
+            self._overlay.start()
+
         cycle = 0
         while True:
             cycle_started_at = time.perf_counter()
@@ -563,6 +581,13 @@ class PokerAgent:
             self._log_seen_cards(_log, list(getattr(snapshot, "hero_cards", [])))
 
             current_ocr_frame = self.ocr_vision.capture_frame()
+
+            # Overlay: atualiza frame e snapshot
+            if self._overlay is not None:
+                if current_ocr_frame is not None:
+                    self._overlay.update_frame(current_ocr_frame)
+                self._overlay.update_snapshot(snapshot)
+                self._overlay.update_ocr_regions(self.ocr_config.regions())
 
             if not self._use_mock_vision:
                 if current_ocr_frame is None:
@@ -642,6 +667,17 @@ class PokerAgent:
 
             cycle_ms = (time.perf_counter() - cycle_started_at) * 1000.0
 
+            # Overlay: atualiza decisão
+            if self._overlay is not None:
+                self._overlay.update_decision(
+                    outcome.action,
+                    cycle_id=cycle_id,
+                    cycle_ms=cycle_ms,
+                    equity=outcome.equity,
+                    spr=outcome.spr,
+                    street=outcome.street if hasattr(outcome, 'street') else 'preflop',
+                )
+
             log_method = _log.highlight if mode == "squad" else _log.info
             log_method(
                 f"mode={mode} partners={partners} "
@@ -667,6 +703,10 @@ class PokerAgent:
                 break
 
             time.sleep(max(0.1, float(self.config.interval_seconds)))
+
+        # Encerra overlay ao sair do loop
+        if self._overlay is not None:
+            self._overlay.stop()
 
 
 if __name__ == "__main__":
