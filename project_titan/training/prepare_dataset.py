@@ -96,6 +96,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--stats-only", action="store_true", dest="stats_only", help="Show stats of existing output dataset")
     parser.add_argument("--save-report", type=str, default=None, dest="save_report", help="Save report JSON to path")
     parser.add_argument("--json", action="store_true", help="Output stats as JSON")
+    parser.add_argument(
+        "--include-unlabeled",
+        action="store_true",
+        dest="include_unlabeled",
+        help="Include images without .txt labels (creates empty stubs = background samples)",
+    )
     return parser.parse_args()
 
 
@@ -107,15 +113,29 @@ def _create_structure(output_root: Path) -> None:
     print(f"[DATASET] Estrutura criada em: {output_root}")
 
 
-def _find_pairs(source: Path) -> list[tuple[Path, Path]]:
-    """Find image-label pairs in a flat directory."""
+def _find_pairs(source: Path, include_unlabeled: bool = False) -> list[tuple[Path, Path]]:
+    """Find image-label pairs in a flat directory.
+
+    Args:
+        source: directory containing images and optional .txt labels.
+        include_unlabeled: when True, create empty .txt stubs for images
+            without labels (useful as background/negative samples).
+    """
     pairs: list[tuple[Path, Path]] = []
+    created_stubs = 0
     image_files = sorted(f for f in source.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS)
 
     for img in image_files:
         label = img.with_suffix(".txt")
         if label.exists():
             pairs.append((img, label))
+        elif include_unlabeled:
+            label.write_text("", encoding="utf-8")
+            pairs.append((img, label))
+            created_stubs += 1
+
+    if created_stubs:
+        print(f"[DATASET] Criados {created_stubs} label stubs vazios (background samples)")
 
     return pairs
 
@@ -303,7 +323,7 @@ def main() -> None:
         print(f"[DATASET] ERRO: diretório source não encontrado: {source}")
         sys.exit(1)
 
-    pairs = _find_pairs(source)
+    pairs = _find_pairs(source, include_unlabeled=getattr(args, 'include_unlabeled', False))
     print(f"[DATASET] Encontrados {len(pairs)} pares (image + label) em {source}")
 
     if len(pairs) == 0:

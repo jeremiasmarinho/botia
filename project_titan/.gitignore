@@ -21,3 +21,5 @@ reports/logs_endurance/
 reports/logs_mock_cycle/
 reports/logs_mock_e2e/
 data/raw/
+data/to_annotate/
+datasets/
