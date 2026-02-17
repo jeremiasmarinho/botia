@@ -145,3 +145,23 @@ def test_execute_handles_hive_none() -> None:
 
     assert isinstance(decision, Decision)
     assert decision.mode == "SOLO"
+
+
+def test_ev_flush_draw_flop_prefers_continue_over_fold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With draw-driven EV on flop, workflow should continue (call/raise), not fold."""
+    monkeypatch.setenv("TITAN_TABLE_PROFILE", "aggressive")
+    monkeypatch.setenv("TITAN_TABLE_POSITION", "btn")
+    monkeypatch.setenv("TITAN_OPPONENTS", "1")
+
+    workflow = _build_workflow(win_rate=0.46)
+    snapshot = Snapshot(
+        hero_cards=["Ah", "Kh", "Qd", "Js", "2c", "3d"],
+        board_cards=["Th", "4h", "9s"],
+        pot=20.0,
+        stack=300.0,
+    )
+
+    decision = workflow.execute(snapshot=snapshot, hive_data={"mode": "solo", "dead_cards": []})
+
+    assert decision.street == "flop"
+    assert decision.action in {"call", "raise_small", "raise_big"}

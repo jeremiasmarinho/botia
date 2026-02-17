@@ -99,6 +99,38 @@ class HiveBrain:
                 cards.append(normalized)
         return cards
 
+    @staticmethod
+    def _card_to_pt(card: str) -> str | None:
+        token = str(card or "").strip().upper().replace("10", "T")
+        if len(token) != 2:
+            return None
+        rank_map = {
+            "A": "Ás",
+            "K": "Rei",
+            "Q": "Dama",
+            "J": "Valete",
+            "T": "Dez",
+            "9": "Nove",
+            "8": "Oito",
+            "7": "Sete",
+            "6": "Seis",
+            "5": "Cinco",
+            "4": "Quatro",
+            "3": "Três",
+            "2": "Dois",
+        }
+        suit_map = {
+            "H": "Copas",
+            "D": "Ouros",
+            "C": "Paus",
+            "S": "Espadas",
+        }
+        rank = rank_map.get(token[0])
+        suit = suit_map.get(token[1])
+        if rank is None or suit is None:
+            return None
+        return f"{rank} de {suit}"
+
     def _prune_local_sessions(self) -> None:
         now = time.time()
         expired = [
@@ -171,8 +203,15 @@ class HiveBrain:
         started_at = time.perf_counter()
         agent_id = str(request.get("agent_id", "")).strip() or "unknown"
         table_id = str(request.get("table_id", "")).strip() or "table_default"
+        cycle_id = max(int(request.get("cycle_id", 0)), 0)
         cards = self._normalize_cards(request.get("cards", []))
+        last_action = str(request.get("last_action", "")).strip().upper()
         active_players = max(int(request.get("active_players", 0)), 0)
+
+        _log.status(
+            f"cycle={cycle_id} agente={agent_id} RECEBI_ESTADO "
+            f"cards={cards} active_players={active_players}"
+        )
 
         self.register_agent(agent_id=agent_id, table_id=table_id, payload={"cards": cards})
         partners, dead_cards = self._partners_from_redis(table_id=table_id, agent_id=agent_id)
@@ -190,15 +229,42 @@ class HiveBrain:
 
         latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
         mode = "squad" if partners else "solo"
+        _log.status(
+            f"cycle={cycle_id} agente={agent_id} PROCESSEI "
+            f"mode={mode} partners={partners} dead_cards={dead_cards} latency_ms={latency_ms}"
+        )
         return {
             "ok": True,
             "mode": mode,
             "agent_id": agent_id,
             "table_id": table_id,
+            "cycle_id": cycle_id,
             "partners": partners,
             "dead_cards": dead_cards,
+            "cards": cards,
+            "last_action": last_action,
             "heads_up_obfuscation": heads_up_obfuscation,
             "latency_ms": latency_ms,
+        }
+
+    def _handle_decision(self, request: dict[str, Any]) -> dict[str, Any]:
+        agent_id = str(request.get("agent_id", "")).strip() or "unknown"
+        table_id = str(request.get("table_id", "")).strip() or "table_default"
+        cycle_id = max(int(request.get("cycle_id", 0)), 0)
+        action = str(request.get("action", "")).strip().upper() or "WAIT"
+        amount = float(request.get("amount", 0.0))
+        target = request.get("target", None)
+        _log.info(
+            f"cycle={cycle_id} agente={agent_id} DECIDI action={action} "
+            f"amount={amount:.2f} target={target} table={table_id}"
+        )
+        return {
+            "ok": True,
+            "type": "decision_ack",
+            "agent_id": agent_id,
+            "table_id": table_id,
+            "cycle_id": cycle_id,
+            "action": action,
         }
 
     def start(self) -> None:
@@ -263,13 +329,28 @@ class HiveBrain:
                     mode = response.get("mode", "solo")
                     agent_id = response.get("agent_id", "?")
                     latency = response.get("latency_ms", 0)
+                    seen_cards = response.get("cards", [])
+                    seen_cards = seen_cards if isinstance(seen_cards, list) else []
+                    first_spoken = ""
+                    if seen_cards:
+                        first_spoken = self._card_to_pt(str(seen_cards[0])) or ""
+                    last_action = str(response.get("last_action", "")).strip().upper()
                     if mode == "squad":
                         partners = response.get("partners", [])
                         _log.highlight(f"Agente {agent_id} conectado -- GOD MODE ativado  partners={partners}  latency={latency}ms")
                     else:
                         _log.success(f"Agente {agent_id} conectado -- modo solo  latency={latency}ms")
+                    if first_spoken:
+                        _log.info(f"Agente {agent_id}: Eu vejo um {first_spoken}")
+                    if last_action in {"RAISE_SMALL", "RAISE_BIG", "CALL", "ALL_IN"}:
+                        _log.info(f"Agente {agent_id}: Action: {last_action}")
                     if response.get("heads_up_obfuscation"):
                         _log.warn(f"Agente {agent_id}: obfuscacao heads-up ativa -- forcando agressividade")
+                    socket.send_json(response)
+                    continue
+
+                if message_type == "decision":
+                    response = self._handle_decision(request)
                     socket.send_json(response)
                     continue
 

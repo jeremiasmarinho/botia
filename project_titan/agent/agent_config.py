@@ -40,6 +40,8 @@ class AgentConfig:
     active_players: int | None = None
     max_cycles: int | None = None
     redis_url: str = "redis://127.0.0.1:6379/0"
+    use_mock_vision: bool = False
+    mock_vision_scenario: str = "A"
 
 
 # ── Environment-variable parsing helpers ─────────────────────────────────
@@ -65,6 +67,18 @@ def parse_int_env(name: str, default: int) -> int:
             return int(raw)
         except ValueError:
             return default
+    return default
+
+
+def parse_bool_env(name: str, default: bool) -> bool:
+    """Read a boolean from env-var *name*, returning *default* on absence."""
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
     return default
 
 

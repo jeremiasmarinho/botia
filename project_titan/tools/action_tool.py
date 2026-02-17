@@ -16,6 +16,7 @@ from agent.ghost_mouse import (
     GhostMouseConfig,
     classify_difficulty,
 )
+from utils.logger import TitanLogger
 
 
 # Default screen regions (overridable via env / set_action_regions)
@@ -31,6 +32,7 @@ class ActionTool:
     """Execute a poker action, optionally driving real cursor movement."""
 
     def __init__(self) -> None:
+        self._log = TitanLogger("Action")
         self._ghost = GhostMouse(GhostMouseConfig())
         self._regions = dict(_DEFAULT_ACTION_REGIONS)
         self._load_regions_from_env()
@@ -68,8 +70,19 @@ class ActionTool:
         target = self._regions.get(action_lower)
 
         if target is not None:
-            delay = self._ghost.move_and_click(target, difficulty=difficulty)
+            self._log.info(
+                f"dispatch action={action_lower} street={street} "
+                f"target=({target.x},{target.y}) difficulty={difficulty}"
+            )
+            delay = self._ghost.move_and_click(
+                target,
+                difficulty=difficulty,
+                action_name=action_lower,
+            )
         else:
+            self._log.warn(
+                f"dispatch action={action_lower} street={street} target=<none> difficulty={difficulty}"
+            )
             delay = self._ghost._thinking_delay(difficulty)
 
         return f"action={action} delay={delay:.2f}s difficulty={difficulty}"

@@ -35,6 +35,7 @@ from typing import Any
 
 from memory.redis_memory import RedisMemory
 from agent.sanity_guard import SanityGuard
+from agent.vision_mock import MockVision
 from agent.vision_ocr import TitanOCR
 from agent.vision_yolo import VisionYolo
 from tools.action_tool import ActionTool
@@ -49,6 +50,7 @@ from agent.agent_config import (
     AgentConfig,
     clamp_float,
     clamp_int,
+    parse_bool_env,
     parse_float_env,
     parse_int_env,
 )
@@ -118,10 +120,14 @@ class PokerAgent:
 
         # ── Tool construction ──────────────────────────────────────
         vision_config = VisionRuntimeConfig()
-        self.vision = VisionTool(
-            model_path=vision_config.model_path,
-            monitor=vision_config.monitor_region(),
-        )
+        self._use_mock_vision = bool(config.use_mock_vision)
+        if self._use_mock_vision:
+            self.vision = MockVision(scenario=config.mock_vision_scenario)
+        else:
+            self.vision = VisionTool(
+                model_path=vision_config.model_path,
+                monitor=vision_config.monitor_region(),
+            )
 
         # OCR pipeline (pot / stack / call)
         self.ocr_config = OCRRuntimeConfig()
@@ -169,6 +175,46 @@ class PokerAgent:
 
         # Restore calibration from file on startup
         self._restore_action_calibration_file_cache()
+
+    @staticmethod
+    def _card_to_pt(card: str) -> str | None:
+        token = str(card or "").strip().upper().replace("10", "T")
+        if len(token) != 2:
+            return None
+        rank_map = {
+            "A": "Ás",
+            "K": "Rei",
+            "Q": "Dama",
+            "J": "Valete",
+            "T": "Dez",
+            "9": "Nove",
+            "8": "Oito",
+            "7": "Sete",
+            "6": "Seis",
+            "5": "Cinco",
+            "4": "Quatro",
+            "3": "Três",
+            "2": "Dois",
+        }
+        suit_map = {
+            "H": "Copas",
+            "D": "Ouros",
+            "C": "Paus",
+            "S": "Espadas",
+        }
+        rank = rank_map.get(token[0])
+        suit = suit_map.get(token[1])
+        if rank is None or suit is None:
+            return None
+        return f"{rank} de {suit}"
+
+    def _log_seen_cards(self, logger: TitanLogger, cards: list[str]) -> None:
+        if not cards:
+            return
+        spoken = [text for text in (self._card_to_pt(card) for card in cards) if text]
+        if not spoken:
+            return
+        logger.info(f"Eu vejo um {spoken[0]}")
 
     # ── OCR helpers ────────────────────────────────────────────────
 
@@ -426,7 +472,7 @@ class PokerAgent:
 
         return 0
 
-    def _checkin(self, cards: list[str], active_players: int) -> dict[str, Any]:
+    def _checkin(self, cards: list[str], active_players: int, cycle_id: int) -> dict[str, Any]:
         """Send a check-in message to HiveBrain and return the response.
 
         The ZMQ ``REQ/REP`` pattern requires strict send→recv alternation.
@@ -435,12 +481,21 @@ class PokerAgent:
         if self._socket is None:
             self._connect()
 
+        last_decision = self.memory.get("last_decision", {})
+        last_action = ""
+        if isinstance(last_decision, dict):
+            raw_action = last_decision.get("decision", "")
+            if isinstance(raw_action, str):
+                last_action = raw_action.strip().upper()
+
         payload = {
             "type": "checkin",
             "agent_id": self.config.agent_id,
             "table_id": self.config.table_id,
+            "cycle_id": max(0, int(cycle_id)),
             "cards": self._normalize_cards(cards),
             "active_players": max(0, int(active_players)),
+            "last_action": last_action,
         }
 
         try:
@@ -452,6 +507,34 @@ class PokerAgent:
         except Exception:
             self._connect()
             return {"ok": False, "error": "connection_timeout"}
+
+    def _report_decision(
+        self,
+        *,
+        cycle_id: int,
+        action: str,
+        amount: float,
+        target: tuple[int, int] | None,
+    ) -> None:
+        if self._socket is None:
+            return
+        payload = {
+            "type": "decision",
+            "agent_id": self.config.agent_id,
+            "table_id": self.config.table_id,
+            "cycle_id": max(0, int(cycle_id)),
+            "action": str(action).strip().lower(),
+            "amount": float(amount),
+            "target": [int(target[0]), int(target[1])] if target is not None else None,
+        }
+        try:
+            self._socket.send_json(payload)
+            _ = self._socket.recv_json()
+        except Exception:
+            try:
+                self._connect()
+            except Exception:
+                pass
 
     # ── Main loop ───────────────────────────────────────────────────
 
@@ -474,48 +557,51 @@ class PokerAgent:
 
         cycle = 0
         while True:
+            cycle_started_at = time.perf_counter()
+            cycle_id = cycle + 1
             snapshot = self.vision.read_table()
+            self._log_seen_cards(_log, list(getattr(snapshot, "hero_cards", [])))
 
-            current_ocr_frame = self.ocr_vision.capture_frame()
-            if current_ocr_frame is None:
-                time.sleep(max(0.1, float(self.config.interval_seconds)))
-                continue
-
-            if self._prev_ocr_frame is not None:
-                is_stable = self.ocr_vision.check_screen_stability(
-                    self._prev_ocr_frame,
-                    current_ocr_frame,
-                    threshold=self._screen_stability_threshold,
-                )
-                if not is_stable:
-                    self._prev_ocr_frame = current_ocr_frame
-                    _log.info("screen_stable=0 ocr_skipped=1")
+            if not self._use_mock_vision:
+                current_ocr_frame = self.ocr_vision.capture_frame()
+                if current_ocr_frame is None:
                     time.sleep(max(0.1, float(self.config.interval_seconds)))
                     continue
 
-            self._prev_ocr_frame = current_ocr_frame
+                if self._prev_ocr_frame is not None:
+                    is_stable = self.ocr_vision.check_screen_stability(
+                        self._prev_ocr_frame,
+                        current_ocr_frame,
+                        threshold=self._screen_stability_threshold,
+                    )
+                    if not is_stable:
+                        self._prev_ocr_frame = current_ocr_frame
+                        _log.info("screen_stable=0 ocr_skipped=1")
+                        time.sleep(max(0.1, float(self.config.interval_seconds)))
+                        continue
 
-            # OCR enrichment: numeric table state (pot / stack / call)
-            ocr_metrics = self._read_ocr_metrics_from_frame(current_ocr_frame)
-            ocr_pot = float(ocr_metrics.get("pot", 0.0))
-            ocr_stack = float(ocr_metrics.get("hero_stack", 0.0))
-            ocr_call = float(ocr_metrics.get("call_amount", 0.0))
+                self._prev_ocr_frame = current_ocr_frame
 
-            if not self.sanity_guard.validate(ocr_pot, ocr_stack, ocr_call):
-                _log.info(
-                    "sanity_ok=0 "
-                    f"reason={self.sanity_guard.last_reason} "
-                    f"pot={ocr_pot:.2f} stack={ocr_stack:.2f} call={ocr_call:.2f}"
-                )
-                time.sleep(max(0.1, float(self.config.interval_seconds)))
-                continue
+                ocr_metrics = self._read_ocr_metrics_from_frame(current_ocr_frame)
+                ocr_pot = float(ocr_metrics.get("pot", 0.0))
+                ocr_stack = float(ocr_metrics.get("hero_stack", 0.0))
+                ocr_call = float(ocr_metrics.get("call_amount", 0.0))
 
-            if ocr_pot > 0:
-                snapshot.pot = ocr_pot
-            if ocr_stack > 0:
-                snapshot.stack = ocr_stack
-            snapshot.call_amount = ocr_call
-            self.memory.set("call_amount", ocr_call)
+                if not self.sanity_guard.validate(ocr_pot, ocr_stack, ocr_call):
+                    _log.info(
+                        "sanity_ok=0 "
+                        f"reason={self.sanity_guard.last_reason} "
+                        f"pot={ocr_pot:.2f} stack={ocr_stack:.2f} call={ocr_call:.2f}"
+                    )
+                    time.sleep(max(0.1, float(self.config.interval_seconds)))
+                    continue
+
+                if ocr_pot > 0:
+                    snapshot.pot = ocr_pot
+                if ocr_stack > 0:
+                    snapshot.stack = ocr_stack
+                snapshot.call_amount = ocr_call
+                self.memory.set("call_amount", ocr_call)
 
             effective_action_points, action_calibration_source = (
                 self._apply_action_calibration(snapshot)
@@ -523,7 +609,7 @@ class PokerAgent:
 
             active_players = self._effective_active_players(snapshot)
             response = self._checkin(
-                cards=snapshot.hero_cards, active_players=active_players,
+                cards=snapshot.hero_cards, active_players=active_players, cycle_id=cycle_id,
             )
 
             mode = response.get("mode", "unknown")
@@ -545,6 +631,16 @@ class PokerAgent:
                 hive_data=response,
             )
 
+            action_target = effective_action_points.get(outcome.action)
+            self._report_decision(
+                cycle_id=cycle_id,
+                action=outcome.action,
+                amount=outcome.amount,
+                target=action_target,
+            )
+
+            cycle_ms = (time.perf_counter() - cycle_started_at) * 1000.0
+
             log_method = _log.highlight if mode == "squad" else _log.info
             log_method(
                 f"mode={mode} partners={partners} "
@@ -554,6 +650,7 @@ class PokerAgent:
                 f"pot={snapshot.pot:.2f} stack={snapshot.stack:.2f} call={snapshot.call_amount:.2f} "
                 f"action_points={list(effective_action_points.keys())} "
                 f"action_calibration={action_calibration_source} "
+                f"cycle={cycle_id} cycle_ms={cycle_ms:.2f} "
                 f"decision={outcome.action} amount={outcome.amount} "
                 f"equity={outcome.equity} spr={outcome.spr} "
                 f"mode={outcome.mode} committed={outcome.committed} "
@@ -578,6 +675,8 @@ if __name__ == "__main__":
     active_players_raw = os.getenv("TITAN_ACTIVE_PLAYERS", "").strip()
     active_players = int(active_players_raw) if active_players_raw.isdigit() else None
     redis_url = os.getenv("TITAN_REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+    use_mock_vision = parse_bool_env("TITAN_USE_MOCK_VISION", False)
+    mock_vision_scenario = os.getenv("TITAN_MOCK_SCENARIO", "ALT").strip() or "ALT"
 
     PokerAgent(
         AgentConfig(
@@ -589,5 +688,7 @@ if __name__ == "__main__":
             active_players=active_players,
             max_cycles=max_cycles,
             redis_url=redis_url,
+            use_mock_vision=use_mock_vision,
+            mock_vision_scenario=mock_vision_scenario,
         )
     ).run()

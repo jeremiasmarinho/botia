@@ -23,7 +23,8 @@ param(
     [int]$Agents = 2,
     [string]$TableId = "table_alpha",
     [int]$MaxCycles = 0,
-    [string]$SimScenario = ""
+    [string]$SimScenario = "",
+    [switch]$UseMockVision
 )
 
 Set-StrictMode -Version Latest
@@ -52,6 +53,7 @@ Write-Host "Python   : $Python"
 Write-Host "Agents   : $Agents"
 Write-Host "Table    : $TableId"
 Write-Host "MaxCycles: $(if ($MaxCycles -gt 0) { $MaxCycles } else { 'unlimited' })"
+Write-Host "MockVision: $(if ($UseMockVision) { 'ON' } else { 'OFF' })"
 Write-Host ""
 
 # -------------------------------------------------------------------
@@ -61,6 +63,18 @@ $agentEnv = @{}
 $agentEnv["TITAN_TABLE_ID"] = $TableId
 if ($MaxCycles -gt 0) { $agentEnv["TITAN_AGENT_MAX_CYCLES"] = "$MaxCycles" }
 if ($SimScenario) { $agentEnv["TITAN_SIM_SCENARIO"] = $SimScenario }
+
+if ($UseMockVision) {
+    $env:TITAN_USE_MOCK_VISION = "1"
+    $agentEnv["TITAN_USE_MOCK_VISION"] = "1"
+    Write-Host "MODO DE TREINO: VISÃO SIMULADA" -ForegroundColor Yellow
+}
+else {
+    $env:TITAN_USE_MOCK_VISION = "0"
+    if ($agentEnv.ContainsKey("TITAN_USE_MOCK_VISION")) {
+        $agentEnv.Remove("TITAN_USE_MOCK_VISION")
+    }
+}
 
 # -------------------------------------------------------------------
 # Launch processes
@@ -115,7 +129,8 @@ try {
         }
         Start-Sleep -Seconds 1
     }
-} finally {
+}
+finally {
     foreach ($p in $procs) {
         if (-not $p.HasExited) {
             try { $p.Kill() } catch { }

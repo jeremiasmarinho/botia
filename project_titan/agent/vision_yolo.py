@@ -575,6 +575,66 @@ class VisionYolo:
             self._model = None
             return False
 
+    # -- Debug helpers ------------------------------------------------------
+
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name, "1" if default else "0").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def _debug_dir(self) -> str:
+        return os.getenv("TITAN_VISION_DEBUG_DIR", os.path.join("reports", "debug_vision")).strip()
+
+    def _save_debug_note(self, reason: str, detail: str = "") -> None:
+        if not self._env_bool("TITAN_VISION_DEBUG_SAVE_FAIL", default=False):
+            return
+        debug_dir = self._debug_dir()
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+        except Exception:
+            return
+        stamp = int(time.time() * 1000)
+        note_path = os.path.join(debug_dir, f"{stamp}_{reason}.txt")
+        lines = [
+            f"reason={reason}",
+            f"detail={detail}",
+            f"model_path={self.model_path or '<empty>'}",
+            f"model_error={self._model_error or '<none>'}",
+            f"confidence={self.confidence:.3f}",
+            f"offset=({self.offset_x},{self.offset_y})",
+            f"region={self.emulator.region}",
+        ]
+        try:
+            with open(note_path, "w", encoding="utf-8") as file_obj:
+                file_obj.write("\n".join(lines) + "\n")
+        except Exception:
+            return
+
+    def _save_debug_frame(self, frame: Any, reason: str) -> None:
+        if not self._env_bool("TITAN_VISION_DEBUG_SAVE_FAIL", default=False):
+            return
+        if frame is None or np is None:
+            self._save_debug_note(reason, detail="frame_none")
+            return
+        debug_dir = self._debug_dir()
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+        except Exception:
+            return
+        stamp = int(time.time() * 1000)
+        png_path = os.path.join(debug_dir, f"{stamp}_{reason}.png")
+        try:
+            if _cv2_module is not None:
+                _cv2_module.imwrite(png_path, frame)
+            else:
+                npy_path = os.path.join(debug_dir, f"{stamp}_{reason}.npy")
+                np.save(npy_path, frame)
+                self._save_debug_note(reason, detail=f"saved={npy_path}")
+                return
+            self._save_debug_note(reason, detail=f"saved={png_path}")
+        except Exception as err:
+            self._save_debug_note(reason, detail=f"save_error={err}")
+
     # -- Captura de tela (ROI apenas) ---------------------------------------
 
     def capture_frame(self) -> Any:
@@ -634,11 +694,17 @@ class VisionYolo:
         """
         # Garante que o modelo está carregado
         if not self._load_model():
+            self._save_debug_note("model_not_loaded")
+            fail_fast = self._env_bool("TITAN_VISION_FAIL_FAST", default=True)
+            if fail_fast:
+                detail = self._model_error or "falha ao carregar modelo"
+                raise RuntimeError(f"VisionYolo fail-fast: {detail}")
             return DetectionFrame(timestamp=time.perf_counter())
 
         # Captura frame da ROI do jogo
         frame = self.capture_frame()
         if frame is None:
+            self._save_debug_note("capture_failed")
             return DetectionFrame(timestamp=time.perf_counter())
 
         height, width = frame.shape[:2]
@@ -651,7 +717,9 @@ class VisionYolo:
                 conf=self.confidence,
                 verbose=False,
             )
-        except Exception:
+        except Exception as err:
+            self._save_debug_frame(frame, "predict_exception")
+            self._save_debug_note("predict_exception", detail=str(err))
             return DetectionFrame(
                 frame_width=width,
                 frame_height=height,
@@ -692,6 +760,9 @@ class VisionYolo:
                         w=w,
                         h=h,
                     ))
+
+        if not detections:
+            self._save_debug_frame(frame, "no_detections")
 
         return DetectionFrame(
             detections=detections,

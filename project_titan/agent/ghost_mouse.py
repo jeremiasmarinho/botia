@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from random import gauss, uniform
 from typing import Any
 
+from utils.logger import TitanLogger
+
 try:
     import pyautogui  # type: ignore[import-untyped]
 
@@ -187,6 +189,7 @@ class GhostMouse:
     """
 
     def __init__(self, config: GhostMouseConfig | None = None) -> None:
+        self._log = TitanLogger("GhostMouse")
         self.config = config or GhostMouseConfig()
         self._enabled = _HAS_PYAUTOGUI and os.getenv(
             "TITAN_GHOST_MOUSE", "0"
@@ -225,6 +228,7 @@ class GhostMouse:
         point: ClickPoint,
         difficulty: str = _DIFFICULTY_EASY,
         relative: bool = True,
+        action_name: str = "",
     ) -> float:
         """Move o cursor até *point* via Bézier, clica e retorna o delay de "pensamento" (segundos).
 
@@ -239,9 +243,14 @@ class GhostMouse:
             O delay de "pensamento" em segundos (já aguardado internamente).
         """
         delay = self._thinking_delay(difficulty)
+        target = self._to_screen(point) if relative else point
+        label = (action_name or "unknown").strip().lower() or "unknown"
+        self._log.info(
+            f"moving_to action={label} button target=({target.x},{target.y}) "
+            f"relative={1 if relative else 0} enabled={1 if self._enabled else 0}"
+        )
 
         if self._enabled and pyautogui is not None:
-            target = self._to_screen(point) if relative else point
             self._execute_move_and_click(target)
 
         return delay
