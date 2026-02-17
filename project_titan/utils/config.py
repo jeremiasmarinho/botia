@@ -8,6 +8,7 @@ from code (e.g. in tests).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 
 
@@ -50,3 +51,69 @@ class VisionRuntimeConfig:
             "width": self.monitor_width,
             "height": self.monitor_height,
         }
+
+
+@dataclass(slots=True)
+class OCRRuntimeConfig:
+    """OCR subsystem configuration (regions + backend toggles).
+
+    Regions are relative to the emulator game canvas (ROI) used by
+    ``VisionYolo.capture_frame()``.
+    """
+
+    enabled: bool = field(default_factory=lambda: os.getenv("TITAN_OCR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"})
+    use_easyocr: bool = field(default_factory=lambda: os.getenv("TITAN_OCR_USE_EASYOCR", "0").strip().lower() in {"1", "true", "yes", "on"})
+    tesseract_cmd: str = field(default_factory=lambda: os.getenv("TITAN_TESSERACT_CMD", "").strip())
+
+    # default ROIs (x, y, w, h) relative to emulator canvas
+    pot_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_POT_REGION", "360,255,180,54"))
+    stack_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_STACK_REGION", "330,610,220,56"))
+    call_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_CALL_REGION", "450,690,180,54"))
+    regions_json: str = field(default_factory=lambda: os.getenv("TITAN_OCR_REGIONS_JSON", "").strip())
+
+    @staticmethod
+    def _parse_region(value: str) -> tuple[int, int, int, int] | None:
+        raw = (value or "").strip().replace(" ", "")
+        if not raw:
+            return None
+        parts = raw.split(",")
+        if len(parts) != 4:
+            return None
+        try:
+            x, y, w, h = (int(part) for part in parts)
+        except ValueError:
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        return (max(0, x), max(0, y), w, h)
+
+    def regions(self) -> dict[str, tuple[int, int, int, int]]:
+        """Return effective OCR regions keyed by metric name."""
+        default_regions = {
+            "pot": self._parse_region(self.pot_region) or (360, 255, 180, 54),
+            "hero_stack": self._parse_region(self.stack_region) or (330, 610, 220, 56),
+            "call_amount": self._parse_region(self.call_region) or (450, 690, 180, 54),
+        }
+
+        if not self.regions_json:
+            return default_regions
+
+        try:
+            payload = json.loads(self.regions_json)
+        except Exception:
+            return default_regions
+
+        if not isinstance(payload, dict):
+            return default_regions
+
+        for key in ("pot", "hero_stack", "call_amount"):
+            raw_region = payload.get(key)
+            if isinstance(raw_region, list) and len(raw_region) == 4:
+                try:
+                    x, y, w, h = (int(v) for v in raw_region)
+                except (TypeError, ValueError):
+                    continue
+                if w > 0 and h > 0:
+                    default_regions[key] = (max(0, x), max(0, y), w, h)
+
+        return default_regions

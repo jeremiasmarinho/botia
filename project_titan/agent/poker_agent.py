@@ -34,11 +34,13 @@ import time
 from typing import Any
 
 from memory.redis_memory import RedisMemory
+from agent.vision_ocr import TitanOCR
+from agent.vision_yolo import VisionYolo
 from tools.action_tool import ActionTool
 from tools.equity_tool import EquityTool
 from tools.rng_tool import RngTool
 from tools.vision_tool import VisionTool
-from utils.config import AgentRuntimeConfig, VisionRuntimeConfig
+from utils.config import AgentRuntimeConfig, OCRRuntimeConfig, VisionRuntimeConfig
 from utils.logger import TitanLogger
 from workflows.poker_hand_workflow import PokerHandWorkflow
 
@@ -119,6 +121,20 @@ class PokerAgent:
             model_path=vision_config.model_path,
             monitor=vision_config.monitor_region(),
         )
+
+        # OCR pipeline (pot / stack / call)
+        self.ocr_config = OCRRuntimeConfig()
+        self.ocr = TitanOCR(
+            use_easyocr=self.ocr_config.use_easyocr,
+            tesseract_cmd=self.ocr_config.tesseract_cmd or None,
+        )
+        self.ocr_vision = VisionYolo(model_path=vision_config.model_path)
+        self._ocr_last_values: dict[str, float] = {
+            "pot": 0.0,
+            "hero_stack": 0.0,
+            "call_amount": 0.0,
+        }
+
         self.equity = EquityTool()
         self.action = ActionTool()
         self.rng = RngTool(storage=self.memory)
@@ -128,6 +144,50 @@ class PokerAgent:
 
         # Restore calibration from file on startup
         self._restore_action_calibration_file_cache()
+
+    # ── OCR helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _crop_region(frame: Any, region: tuple[int, int, int, int]) -> Any | None:
+        if frame is None:
+            return None
+        x, y, w, h = region
+        try:
+            frame_h, frame_w = frame.shape[:2]
+        except Exception:
+            return None
+
+        x1 = max(0, min(frame_w, int(x)))
+        y1 = max(0, min(frame_h, int(y)))
+        x2 = max(0, min(frame_w, x1 + int(w)))
+        y2 = max(0, min(frame_h, y1 + int(h)))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return frame[y1:y2, x1:x2]
+
+    def _read_ocr_metrics(self) -> dict[str, float]:
+        """Read pot/stack/call via OCR with safe fallback semantics."""
+        if not self.ocr_config.enabled:
+            return dict(self._ocr_last_values)
+
+        frame = self.ocr_vision.capture_frame()
+        if frame is None:
+            return dict(self._ocr_last_values)
+
+        regions = self.ocr_config.regions()
+        updated = dict(self._ocr_last_values)
+
+        for key, region in regions.items():
+            crop = self._crop_region(frame, region)
+            value = self.ocr.read_numeric_region(
+                crop,
+                key=key,
+                fallback=updated.get(key, 0.0),
+            )
+            updated[key] = max(0.0, float(value))
+
+        self._ocr_last_values = updated
+        return updated
 
     # ── Calibration cache helpers ───────────────────────────────────
 
@@ -338,6 +398,20 @@ class PokerAgent:
         cycle = 0
         while True:
             snapshot = self.vision.read_table()
+
+            # OCR enrichment: numeric table state (pot / stack / call)
+            ocr_metrics = self._read_ocr_metrics()
+            ocr_pot = float(ocr_metrics.get("pot", 0.0))
+            ocr_stack = float(ocr_metrics.get("hero_stack", 0.0))
+            ocr_call = float(ocr_metrics.get("call_amount", 0.0))
+
+            if ocr_pot > 0:
+                snapshot.pot = ocr_pot
+            if ocr_stack > 0:
+                snapshot.stack = ocr_stack
+            snapshot.call_amount = ocr_call
+            self.memory.set("call_amount", ocr_call)
+
             effective_action_points, action_calibration_source = (
                 self._apply_action_calibration(snapshot)
             )
@@ -372,6 +446,7 @@ class PokerAgent:
                 f"dead_cards={dead_cards} active_players={active_players} "
                 f"hu_obf={heads_up_obfuscation} latency_ms={latency_ms} "
                 f"my_turn={snapshot.is_my_turn} state_changed={snapshot.state_changed} "
+                f"pot={snapshot.pot:.2f} stack={snapshot.stack:.2f} call={snapshot.call_amount:.2f} "
                 f"action_points={list(effective_action_points.keys())} "
                 f"action_calibration={action_calibration_source} "
                 f"decision={outcome.action} amount={outcome.amount} "

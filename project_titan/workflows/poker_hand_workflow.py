@@ -676,6 +676,7 @@ class PokerHandWorkflow:
                 "dynamic_simulations": dynamic_simulations,
                 "pot": pot_value,
                 "stack": stack_value,
+                "call_amount": self._to_float(getattr(snapshot, "call_amount", 0.0)),
                 "decision": decision_action,
                 "amount": raise_amount,
                 "description": full_description,

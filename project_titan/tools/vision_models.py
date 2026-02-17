@@ -26,6 +26,7 @@ class TableSnapshot:
         board_cards:  Community cards visible on the board.
         pot:          Current pot size (float, zero when unknown).
         stack:        Hero's remaining stack.
+        call_amount:  Current call amount shown in action area.
         dead_cards:   Cards known to be out of play (mucked / burned).
         current_opponent: Identifier string of the opponent in focus.
         active_players:   Number of players still in the hand.
@@ -42,6 +43,7 @@ class TableSnapshot:
     board_cards: list[str]
     pot: float
     stack: float
+    call_amount: float = 0.0
     dead_cards: list[str] = field(default_factory=list)
     current_opponent: str = ""
     active_players: int = 0

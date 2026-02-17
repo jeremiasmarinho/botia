@@ -205,10 +205,11 @@ class VisionTool:
         turn_key = "1" if snapshot.is_my_turn else "0"
         pot_key = f"{snapshot.pot:.2f}"
         stack_key = f"{snapshot.stack:.2f}"
+        call_key = f"{snapshot.call_amount:.2f}"
         return "|".join([
             hero_key, board_key, dead_key, opponent_key,
             active_players_key, action_points_key,
-            turn_key, pot_key, stack_key,
+            turn_key, pot_key, stack_key, call_key,
         ])
 
     def _mark_state_change(self, snapshot: TableSnapshot) -> TableSnapshot:
@@ -221,6 +222,7 @@ class VisionTool:
             board_cards=list(snapshot.board_cards),
             pot=snapshot.pot,
             stack=snapshot.stack,
+            call_amount=snapshot.call_amount,
             dead_cards=list(snapshot.dead_cards),
             current_opponent=snapshot.current_opponent,
             active_players=int(max(snapshot.active_players, 0)),
@@ -247,7 +249,7 @@ class VisionTool:
     def _fallback_snapshot() -> TableSnapshot:
         """Return an empty snapshot used when capture or inference fails."""
         return TableSnapshot(
-            hero_cards=[], board_cards=[], pot=0.0, stack=0.0,
+            hero_cards=[], board_cards=[], pot=0.0, stack=0.0, call_amount=0.0,
             dead_cards=[], current_opponent="", active_players=0,
             action_points={}, showdown_events=[],
             is_my_turn=False, state_changed=False,
@@ -267,13 +269,13 @@ class VisionTool:
         """
         scenarios: dict[str, TableSnapshot] = {
             "wait": TableSnapshot(
-                hero_cards=[], board_cards=[], pot=0.0, stack=0.0,
+                hero_cards=[], board_cards=[], pot=0.0, stack=0.0, call_amount=0.0,
                 dead_cards=[], active_players=0, action_points={}, is_my_turn=False,
             ),
             "fold": TableSnapshot(
                 hero_cards=["7c", "2d", "4h", "3s"],
                 board_cards=["Kc", "Qd", "9s"],
-                pot=45.0, stack=180.0,
+                pot=45.0, stack=180.0, call_amount=12.0,
                 dead_cards=["Ah"], active_players=4,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
@@ -284,7 +286,7 @@ class VisionTool:
             "call": TableSnapshot(
                 hero_cards=["As", "Kd", "Qh", "Js"],
                 board_cards=["9c", "7d", "2s"],
-                pot=40.0, stack=220.0,
+                pot=40.0, stack=220.0, call_amount=8.0,
                 dead_cards=["Tc", "8h"], active_players=3,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
@@ -295,7 +297,7 @@ class VisionTool:
             "raise": TableSnapshot(
                 hero_cards=["As", "Ah", "Ks", "Kh", "Qs", "Qh"],
                 board_cards=["Ad", "Kd", "Qc", "Jh"],
-                pot=20.0, stack=600.0,
+                pot=20.0, stack=600.0, call_amount=4.0,
                 dead_cards=["2c", "2d", "2h"], active_players=2,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
@@ -475,6 +477,7 @@ class VisionTool:
             board_cards=board_cards,
             pot=detected_pot,
             stack=detected_stack,
+            call_amount=0.0,
             dead_cards=dead_cards,
             current_opponent=current_opponent,
             active_players=inferred_active_players,
