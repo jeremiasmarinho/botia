@@ -440,64 +440,246 @@ def _action_edit_config() -> None:
 
 
 def _action_overlay_standalone() -> None:
-    """Abre overlay standalone numa imagem."""
+    """Abre overlay standalone — ao vivo ou com imagem estática."""
     print(_c(_MAGENTA, "\n=== OVERLAY STANDALONE ===\n"))
 
-    club_image = _PROJECT_ROOT / "club_table_reference.png"
     club_config = _PROJECT_ROOT / "config_club.yaml"
 
-    if club_image.exists():
+    # Detecta config club e ativa se aceito
+    previous_config = ""
+    if club_config.exists():
         use_club = input(
-            "Detectei imagem de Clube. Deseja calibrar usando "
-            "'club_table_reference.png' e 'config_club.yaml'? [S/N] "
+            "Detectei config_club.yaml. Usar configuração de Clube? [S/N] "
         ).strip().lower()
         if use_club in ("s", "sim", "y", "yes"):
             previous_config = os.getenv("TITAN_CONFIG_FILE", "")
-            if club_config.exists():
-                os.environ["TITAN_CONFIG_FILE"] = "config_club.yaml"
-                cfg.reload()
-                print(_c(_MAGENTA, "  Modo Clube: usando config_club.yaml"))
+            os.environ["TITAN_CONFIG_FILE"] = "config_club.yaml"
+            cfg.reload()
+            print(_c(_MAGENTA, "  Modo Clube: usando config_club.yaml"))
+
+    try:
+        print()
+        print(_c(_CYAN, "  [1] AO VIVO — captura do emulador em tempo real"))
+        print(_c(_CYAN, "  [2] ESTÁTICO — usar imagem de referência"))
+        choice = input("\n  Escolha (1/2): ").strip()
+
+        if choice == "2":
+            club_image = _PROJECT_ROOT / "club_table_reference.png"
+            prompt_default = _CLI_IMAGE_PATH or ""
+            if club_image.exists():
+                print(f"  Dica: imagem de clube detectada = {club_image.name}")
+                prompt_default = prompt_default or str(club_image)
+            image = input(f"  Caminho da imagem [{prompt_default or 'nenhum'}]: ").strip() or prompt_default
+            if image:
+                _preview_static_overlay(image)
             else:
-                print(_c(_YELLOW, "  Aviso: config_club.yaml não encontrado; usando config atual."))
+                print(_c(_YELLOW, "  Nenhuma imagem fornecida.\n"))
+        else:
+            _preview_live_overlay()
+    finally:
+        if previous_config:
+            os.environ["TITAN_CONFIG_FILE"] = previous_config
+        elif "TITAN_CONFIG_FILE" in os.environ and club_config.exists():
+            os.environ.pop("TITAN_CONFIG_FILE", None)
+        cfg.reload()
 
-            try:
-                _preview_static_overlay(str(club_image))
-            finally:
-                if previous_config:
-                    os.environ["TITAN_CONFIG_FILE"] = previous_config
-                elif "TITAN_CONFIG_FILE" in os.environ:
-                    os.environ.pop("TITAN_CONFIG_FILE")
-                cfg.reload()
-            return
 
-    prompt_default = _CLI_IMAGE_PATH or ""
-    if prompt_default:
-        print(f"  Dica: --image_path ativo = {prompt_default}")
-    image = input("  Caminho da imagem (ou Enter para frame ao vivo): ").strip() or prompt_default
+def _preview_live_overlay() -> None:
+    """Overlay AO VIVO — captura contínua do emulador com YOLO + OCR.
 
-    if image:
-        _preview_static_overlay(image)
+    Loop principal:
+      1. Captura frame do emulador via mss (ROI sem chrome)
+      2. Roda inferência YOLO no frame
+      3. Roda OCR nas regiões calibradas (pot, stack, call)
+      4. Atualiza TerminatorVision em tempo real
+      5. Repete até o usuário pressionar Q
+    """
+    try:
+        import cv2  # type: ignore[import-untyped]
+    except ImportError:
+        print(_c(_RED, "  OpenCV nao encontrado. Instale: pip install opencv-python\n"))
+        return
+
+    from tools.terminator_vision import TerminatorVision
+    from utils.config import OCRRuntimeConfig
+    from agent.vision_yolo import VisionYolo
+
+    # --- Carregar modelo YOLO ---
+    model_path = cfg.get_str("vision.model_path", "")
+    model_file_str = ""
+    if model_path:
+        model_file = Path(model_path)
+        if not model_file.is_absolute():
+            model_file = (_PROJECT_ROOT / model_file).resolve()
+        model_file_str = str(model_file)
+        if not model_file.exists():
+            print(_c(_YELLOW, f"  Modelo não encontrado: {model_file}"))
+            model_file_str = ""
+
+    yolo_model = None
+    if model_file_str:
+        try:
+            from ultralytics import YOLO  # type: ignore[import-untyped]
+            yolo_model = YOLO(model_file_str)
+            print(_c(_GREEN, f"  Modelo YOLO carregado: {model_path}"))
+        except Exception as err:
+            print(_c(_YELLOW, f"  Aviso YOLO: {err}"))
     else:
-        print("  Capturando frame ao vivo do emulador...\n")
-        python = _find_python()
-        code = (
-            "from agent.vision_yolo import VisionYolo; "
-            "import cv2; "
-            "v = VisionYolo(model_path=''); "
-            "v.find_window(); "
-            "f = v.capture_frame(); "
-            "print('Frame capturado' if f is not None else 'ERRO: frame None'); "
-            "cv2.imshow('Titan Frame', f) if f is not None else None; "
-            "cv2.waitKey(0) if f is not None else None; "
-            "cv2.destroyAllWindows() if f is not None else None"
-        )
-        _run_command([python, "-c", code])
+        print(_c(_YELLOW, "  Sem modelo YOLO — overlay mostrará apenas o frame."))
+
+    confidence = cfg.get_float("vision.confidence_threshold", 0.35)
+
+    # --- Localizar emulador ---
+    emulator_title = cfg.get_str("vision.emulator_title", "LDPlayer")
+    vision = VisionYolo(model_path=model_file_str)
+    if not vision.find_window():
+        print(_c(_RED, f"  Emulador '{emulator_title}' não encontrado. Está aberto?\n"))
+        return
+    print(_c(_GREEN, f"  Emulador encontrado: {emulator_title}"))
+
+    # --- OCR setup ---
+    ocr_pot_str = cfg.get_str("ocr.pot_region", "")
+    ocr_stack_str = cfg.get_str("ocr.stack_region", "")
+    ocr_call_str = cfg.get_str("ocr.call_region", "")
+    if ocr_pot_str:
+        os.environ["TITAN_OCR_POT_REGION"] = ocr_pot_str
+    if ocr_stack_str:
+        os.environ["TITAN_OCR_STACK_REGION"] = ocr_stack_str
+    if ocr_call_str:
+        os.environ["TITAN_OCR_CALL_REGION"] = ocr_call_str
+
+    ocr_regions = OCRRuntimeConfig().regions()
+    ocr_engine = None
+    try:
+        from agent.vision_ocr import TitanOCR
+        ocr_cfg_use_easy = cfg.get_bool("ocr.use_easyocr", False)
+        ocr_cfg_tess_cmd = cfg.get_str("ocr.tesseract_cmd", "")
+        ocr_engine = TitanOCR(use_easyocr=ocr_cfg_use_easy, tesseract_cmd=ocr_cfg_tess_cmd or None)
+    except Exception as err:
+        print(_c(_YELLOW, f"  OCR indisponível: {err}"))
+
+    # --- Action points ---
+    action_buttons_cfg = cfg.get_dict("action_buttons")
+    action_points: dict[str, tuple[int, int]] = {}
+    for action_name in ("fold", "call", "raise_small", "raise_big"):
+        raw = action_buttons_cfg.get(action_name)
+        if isinstance(raw, list) and len(raw) == 2:
+            try:
+                action_points[action_name] = (int(raw[0]), int(raw[1]))
+            except (TypeError, ValueError):
+                continue
+
+    # --- Overlay ---
+    overlay = TerminatorVision(
+        max_fps=cfg.get_int("overlay.max_fps", 10),
+        hud_width=cfg.get_int("overlay.hud_width", 320),
+        show_grid=cfg.get_bool("overlay.show_grid", False),
+        grid_size=cfg.get_int("overlay.grid_size", 50),
+        window_name="TITAN: Visao AO VIVO",
+    )
+    overlay.update_ocr_regions(ocr_regions)
+    overlay.start()
+
+    print(_c(_CYAN, "\n  Overlay AO VIVO ativo. Pressione Q na janela para fechar."))
+    print(_c(_CYAN, f"  Modelo: {model_path or '(nenhum)'}  |  Botões: {len(action_points)}\n"))
+
+    cycle = 0
+    try:
+        while overlay.is_running:
+            cycle += 1
+            t0 = time.perf_counter()
+
+            # 1) Capturar frame do emulador
+            frame = vision.capture_frame()
+            if frame is None:
+                # Tenta re-localizar a janela
+                vision.find_window()
+                time.sleep(0.3)
+                continue
+
+            # 2) YOLO inference
+            yolo_detections: list[dict[str, object]] = []
+            if yolo_model is not None:
+                try:
+                    results = yolo_model.predict(source=frame, conf=confidence, verbose=False)
+                    if results and len(results) > 0:
+                        result = results[0]
+                        names: dict[int, str] = getattr(result, "names", {})
+                        boxes = getattr(result, "boxes", None)
+                        if boxes is not None:
+                            cls_list = boxes.cls.tolist() if boxes.cls is not None else []
+                            xyxy_list = boxes.xyxy.tolist() if boxes.xyxy is not None else []
+                            conf_list = boxes.conf.tolist() if boxes.conf is not None else []
+                            for idx, (cls_idx, xyxy) in enumerate(zip(cls_list, xyxy_list)):
+                                label = names.get(int(cls_idx), "")
+                                conf_val = float(conf_list[idx]) if idx < len(conf_list) else 0.0
+                                x1, y1, x2, y2 = (float(v) for v in xyxy)
+                                cx = int((x1 + x2) / 2.0)
+                                cy = int((y1 + y2) / 2.0)
+                                w_det = int(x2 - x1)
+                                h_det = int(y2 - y1)
+                                yolo_detections.append({
+                                    "label": label, "confidence": conf_val,
+                                    "cx": cx, "cy": cy, "w": w_det, "h": h_det,
+                                })
+                except Exception:
+                    pass
+
+            # 3) OCR
+            pot_val = 0.0
+            stack_val = 0.0
+            call_val = 0.0
+            if ocr_engine is not None:
+                fh, fw = frame.shape[:2]
+                for region_name, (rx, ry, rw, rh) in ocr_regions.items():
+                    if rw <= 0 or rh <= 0:
+                        continue
+                    if ry + rh > fh or rx + rw > fw:
+                        continue
+                    crop = frame[ry : ry + rh, rx : rx + rw]
+                    if crop is not None and crop.size > 0:
+                        value = ocr_engine.read_numeric_region(crop, key=region_name)
+                        if "pot" in region_name:
+                            pot_val = value
+                        elif "stack" in region_name or "hero" in region_name:
+                            stack_val = value
+                        elif "call" in region_name:
+                            call_val = value
+
+            # 4) Atualizar overlay
+            cycle_ms = (time.perf_counter() - t0) * 1000.0
+            snapshot = SimpleNamespace(
+                hero_cards=[],
+                board_cards=[],
+                dead_cards=[],
+                pot=pot_val,
+                stack=stack_val,
+                call_amount=call_val,
+                active_players=0,
+                is_my_turn=False,
+                action_points=action_points,
+            )
+            overlay.update_frame(frame)
+            overlay.update_detections(yolo_detections)
+            overlay.update_snapshot(snapshot)
+            overlay.update_decision(
+                "wait", cycle_id=cycle, cycle_ms=cycle_ms,
+                equity=0.0, spr=99.0, street="preflop",
+            )
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        overlay.stop()
+        print(_c(_CYAN, f"  Overlay encerrado após {cycle} ciclos.\n"))
 
 
 def _preview_static_overlay(image_path: str) -> None:
-    """Abre uma imagem estática no Terminator Vision para calibração.
+    """Abre uma imagem estática no Terminator Vision com inferência YOLO + OCR.
 
     Renderiza no frame:
+      - Detecções YOLO (bounding boxes) usando o modelo configurado
+      - Valores OCR lidos das regiões calibradas (pot, stack, call)
       - Pontos de `action_buttons` do config.yaml
       - Regiões OCR (`pot`, `hero_stack`, `call_amount`)
       - Grid opcional (`overlay.show_grid`)
@@ -524,6 +706,88 @@ def _preview_static_overlay(image_path: str) -> None:
         print(_c(_RED, f"  Falha ao abrir imagem: {image_candidate}\n"))
         return
 
+    # --- Inferência YOLO no frame estático ---
+    yolo_detections: list[dict[str, object]] = []
+    model_path = cfg.get_str("vision.model_path", "")
+    if model_path:
+        model_file = Path(model_path)
+        if not model_file.is_absolute():
+            model_file = (_PROJECT_ROOT / model_file).resolve()
+        if model_file.exists():
+            try:
+                from ultralytics import YOLO  # type: ignore[import-untyped]
+
+                confidence = cfg.get_float("vision.confidence_threshold", 0.35)
+                model = YOLO(str(model_file))
+                results = model.predict(source=frame, conf=confidence, verbose=False)
+                if results and len(results) > 0:
+                    result = results[0]
+                    names: dict[int, str] = getattr(result, "names", {})
+                    boxes = getattr(result, "boxes", None)
+                    if boxes is not None:
+                        cls_list = boxes.cls.tolist() if boxes.cls is not None else []
+                        xyxy_list = boxes.xyxy.tolist() if boxes.xyxy is not None else []
+                        conf_list = boxes.conf.tolist() if boxes.conf is not None else []
+                        for idx, (cls_idx, xyxy) in enumerate(zip(cls_list, xyxy_list)):
+                            label = names.get(int(cls_idx), "")
+                            conf_val = float(conf_list[idx]) if idx < len(conf_list) else 0.0
+                            x1, y1, x2, y2 = (float(v) for v in xyxy)
+                            cx = int((x1 + x2) / 2.0)
+                            cy = int((y1 + y2) / 2.0)
+                            w = int(x2 - x1)
+                            h = int(y2 - y1)
+                            yolo_detections.append({
+                                "label": label, "confidence": conf_val,
+                                "cx": cx, "cy": cy, "w": w, "h": h,
+                            })
+                print(_c(_GREEN, f"  YOLO: {len(yolo_detections)} detecções no frame."))
+            except Exception as err:
+                print(_c(_YELLOW, f"  Aviso YOLO: {err}"))
+        else:
+            print(_c(_YELLOW, f"  Modelo não encontrado: {model_file}"))
+    else:
+        print(_c(_YELLOW, "  vision.model_path vazio — sem inferência YOLO."))
+
+    # --- OCR nas regiões calibradas ---
+    # OCRRuntimeConfig lê env vars; para modo club precisamos injetar do YAML
+    ocr_pot_str = cfg.get_str("ocr.pot_region", "")
+    ocr_stack_str = cfg.get_str("ocr.stack_region", "")
+    ocr_call_str = cfg.get_str("ocr.call_region", "")
+    if ocr_pot_str:
+        os.environ["TITAN_OCR_POT_REGION"] = ocr_pot_str
+    if ocr_stack_str:
+        os.environ["TITAN_OCR_STACK_REGION"] = ocr_stack_str
+    if ocr_call_str:
+        os.environ["TITAN_OCR_CALL_REGION"] = ocr_call_str
+
+    ocr_regions = OCRRuntimeConfig().regions()
+    pot_val = 0.0
+    stack_val = 0.0
+    call_val = 0.0
+    try:
+        from agent.vision_ocr import TitanOCR
+
+        ocr_cfg_use_easy = cfg.get_bool("ocr.use_easyocr", False)
+        ocr_cfg_tess_cmd = cfg.get_str("ocr.tesseract_cmd", "")
+        ocr_engine = TitanOCR(use_easyocr=ocr_cfg_use_easy, tesseract_cmd=ocr_cfg_tess_cmd or None)
+
+        for region_name, (rx, ry, rw, rh) in ocr_regions.items():
+            if rw <= 0 or rh <= 0:
+                continue
+            crop = frame[ry : ry + rh, rx : rx + rw]
+            if crop is not None and crop.size > 0:
+                value = ocr_engine.read_numeric_region(crop, key=region_name)
+                if "pot" in region_name:
+                    pot_val = value
+                elif "stack" in region_name or "hero" in region_name:
+                    stack_val = value
+                elif "call" in region_name:
+                    call_val = value
+        print(_c(_GREEN, f"  OCR: pot={pot_val:.1f}  stack={stack_val:.1f}  call={call_val:.1f}"))
+    except Exception as err:
+        print(_c(_YELLOW, f"  Aviso OCR: {err}"))
+
+    # --- Montar action_points ---
     action_buttons_cfg = cfg.get_dict("action_buttons")
     action_points: dict[str, tuple[int, int]] = {}
     for action_name in ("fold", "call", "raise_small", "raise_big"):
@@ -534,15 +798,13 @@ def _preview_static_overlay(image_path: str) -> None:
             except (TypeError, ValueError):
                 continue
 
-    ocr_regions = OCRRuntimeConfig().regions()
-
     snapshot = SimpleNamespace(
         hero_cards=[],
         board_cards=[],
         dead_cards=[],
-        pot=0.0,
-        stack=0.0,
-        call_amount=0.0,
+        pot=pot_val,
+        stack=stack_val,
+        call_amount=call_val,
         active_players=0,
         is_my_turn=False,
         action_points=action_points,
@@ -556,12 +818,14 @@ def _preview_static_overlay(image_path: str) -> None:
         window_name="TITAN: Calibracao Estatica",
     )
     overlay.update_frame(frame)
+    overlay.update_detections(yolo_detections)
     overlay.update_snapshot(snapshot)
     overlay.update_ocr_regions(ocr_regions)
     overlay.update_decision("wait", cycle_id=0, cycle_ms=0.0, equity=0.0, spr=99.0, street="preflop")
 
-    print(_c(_CYAN, "  Preview estático aberto. Pressione Q na janela para fechar."))
-    print(_c(_CYAN, "  Dica: edite config.yaml e reabra a opção 8 para validar alinhamento.\n"))
+    print(_c(_CYAN, "  Preview aberto. Pressione Q na janela para fechar."))
+    print(_c(_CYAN, f"  Modelo: {model_path or '(nenhum)'}"))
+    print(_c(_CYAN, f"  Detecções: {len(yolo_detections)} | Botões: {len(action_points)}\n"))
 
     overlay.start()
     try:
@@ -636,6 +900,88 @@ def _action_visual_calibrator() -> None:
     ])
 
 
+def _action_card_annotator() -> None:
+    """Abre anotador interativo de cartas (OpenCV)."""
+    print(_c(_MAGENTA, "\n=== ANOTADOR DE CARTAS ===\n"))
+    print(_c(_CYAN, "  Ferramenta para anotar cartas de poker nos frames capturados."))
+    print(_c(_CYAN, "  Clique+arraste ao redor de cada carta, depois digite o label (ex: Ah, 9s).\n"))
+
+    source_default = "data/to_annotate"
+    source = input(f"  Diretório de imagens [{source_default}]: ").strip() or source_default
+
+    config_default = _CLI_CONFIG_PATH or os.getenv("TITAN_CONFIG_FILE", "").strip() or "config_club.yaml"
+    config_val = input(f"  Config YAML [{config_default}]: ").strip() or config_default
+
+    start = input("  Começar da imagem nº [0]: ").strip() or "0"
+
+    python = _find_python()
+    _run_command([
+        python,
+        "-m",
+        "tools.card_annotator",
+        "--source",
+        source,
+        "--config",
+        config_val,
+        "--start-from",
+        start,
+    ])
+
+
+def _action_train_yolo() -> None:
+    """Treina ou retoma treinamento YOLO."""
+    print(_c(_MAGENTA, "\n=== TREINO YOLO ===\n"))
+
+    # Count current dataset
+    dataset_dir = _PROJECT_ROOT / "datasets" / "titan_cards"
+    if dataset_dir.exists():
+        train_imgs = list((dataset_dir / "images" / "train").glob("*.png"))
+        val_imgs = list((dataset_dir / "images" / "val").glob("*.png"))
+        print(_c(_CYAN, f"  Dataset atual: {len(train_imgs)} train / {len(val_imgs)} val"))
+    else:
+        print(_c(_YELLOW, "  Dataset não encontrado. Rode prepare_dataset primeiro."))
+
+    print()
+    print(_c(_CYAN, "  [1] Reconstruir dataset (prepare_dataset + auto_labeler)"))
+    print(_c(_CYAN, "  [2] Treinar do zero (yolov8n.pt base)"))
+    print(_c(_CYAN, "  [3] Fine-tune modelo existente (titan_v1.pt → v2)"))
+    print(_c(_CYAN, "  [4] Apenas reconstruir dataset (sem treinar)"))
+
+    choice = input("\n  Escolha (1/2/3/4): ").strip()
+    python = _find_python()
+
+    if choice in ("1", "4"):
+        # Rebuild dataset
+        print(_c(_CYAN, "\n  Reconstruindo dataset...\n"))
+        _run_command([python, "-m", "training.prepare_dataset", "--include-unlabeled"])
+        if choice == "4":
+            return
+
+    epochs = input("  Epochs [150]: ").strip() or "150"
+    batch = input("  Batch size [16]: ").strip() or "16"
+    name = input("  Nome do run [titan_v2]: ").strip() or "titan_v2"
+
+    if choice == "3":
+        model_current = cfg.get_str("vision.model_path", "models/titan_v1.pt")
+        model = input(f"  Modelo base [{model_current}]: ").strip() or model_current
+    else:
+        model = "yolov8n.pt"
+
+    report_path = f"reports/train_report_{name}.json"
+
+    cmd = [
+        python, "training/train_yolo.py",
+        "--data", "training/data.yaml",
+        "--model", model,
+        "--epochs", epochs,
+        "--batch", batch,
+        "--name", name,
+        "--save-report", report_path,
+    ]
+    print(_c(_GREEN, f"\n  Comando: {' '.join(cmd)}\n"))
+    _run_command(cmd)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Menu Principal
 # ═══════════════════════════════════════════════════════════════════════════
@@ -650,6 +996,8 @@ _MENU_ITEMS = [
     ("7", "Editar config.yaml", _action_edit_config),
     ("8", "Overlay Standalone (Testar Visao)", _action_overlay_standalone),
     ("9", "Calibrador Visual (Rato)", _action_visual_calibrator),
+    ("A", "Anotar Cartas (Card Annotator)", _action_card_annotator),
+    ("T", "Treinar YOLO", _action_train_yolo),
     ("0", "Sair", None),
 ]
 

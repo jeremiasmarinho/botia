@@ -1,210 +1,127 @@
-# CONFIGURAÇÃO ESPECÍFICA PARA CLUBE PRIVADO.
-# ═══════════════════════════════════════════════════════════════════════════
-# Project Titan — Arquivo de Configuração Central
-# ═══════════════════════════════════════════════════════════════════════════
-# Ajuste o comportamento do bot sem tocar em código Python.
-# Variáveis de ambiente (TITAN_*) sobrescrevem valores deste arquivo.
-# ═══════════════════════════════════════════════════════════════════════════
-
-# ── Poker: estratégia e agressividade ─────────────────────────────────────
 poker:
-  # Perfil da mesa: tight | normal | aggressive
-  table_profile: "normal"
-
-  # Posição padrão: utg | mp | co | btn | sb | bb
-  table_position: "mp"
-
-  # Número de oponentes na mesa (1–9)
+  table_profile: normal
+  table_position: mp
   opponents: 1
-
-  # Nível de agressividade geral (0.0 conservador a 1.0 ultra-agressivo)
   aggression_level: 0.5
-
-  # Bônus de God Mode (redução de thresholds) quando em squad
   god_mode_bonus: 0.12
-
-  # SPR mínimo para comprometimento automático (all-in)
   commitment_spr: 2.0
-
-  # Equity mínima para comprometimento automático
   commitment_equity: 0.45
-
-  # Número base de simulações Monte-Carlo
   simulations: 5000
-
-  # Escalar simulações por profundidade de street (true/false)
   dynamic_simulations: true
-
-# ── Visão: YOLO, confiança e captura ─────────────────────────────────────
 vision:
-  # Caminho do modelo YOLO (.pt)
-  model_path: ""
-
-  # Confiança mínima para detecções YOLO (0.0 – 1.0)
+  model_path: models/titan_v1.pt
   confidence_threshold: 0.35
-
-  # Título parcial da janela do emulador
-  emulator_title: "LDPlayer"
-
-  # FPS alvo para captura de tela
+  emulator_title: LDPlayer
   target_fps: 30
-
-  # Chrome do emulador (pixels a remover)
   chrome_top: 35
   chrome_bottom: 0
   chrome_left: 0
   chrome_right: 38
-
-  # Salvar snapshots a cada frame (modo coleta)
   collect_data: false
-
-  # Diretório para snapshots coletados
-  collect_data_dir: "data/raw"
-
-  # Modo fail-fast: aborta se modelo não carregar
+  collect_data_dir: data/raw
   fail_fast: false
-
-  # ROI manual de referência (útil para calibração visual em imagem estática)
-  # Não substitui automaticamente a ROI do emulador; serve como preset/documentação.
   roi:
     left: 0
     top: 0
     width: 0
     height: 0
-
-# ── Visual Overlay: janela de debug "Visão do Exterminador" ──────────────
+  regions:
+    hero_area:
+      x: 321
+      y: 828
+      w: 166
+      h: 84
+    board_area:
+      x: 116
+      y: 411
+      w: 335
+      h: 95
 overlay:
-  # Ativar janela de debug overlay (true/false)
   enabled: false
-
-  # Tamanho da fonte nos labels
   font_scale: 0.5
-
-  # Espessura das linhas das bounding boxes
   line_thickness: 2
-
-  # Transparência do preenchimento (0.0 – 1.0)
   alpha: 0.4
-
-  # Mostrar scores de confiança nos labels
   show_confidence: true
-
-  # Mostrar painel HUD lateral
   show_hud: true
-
-  # Largura do painel HUD (pixels)
   hud_width: 320
-
-  # Confiança mínima para desenhar uma detecção
   min_confidence: 0.25
-
-  # FPS máximo de atualização do overlay
   max_fps: 10
-
-  # Mostrar grade de pixels para calibração manual (debug)
   show_grid: false
-
-  # Tamanho da célula da grade (pixels)
   grid_size: 50
-
-# ── OCR: leitura de pot, stack e call ─────────────────────────────────────
 ocr:
-  # Ativar OCR (true/false)
   enabled: true
-
-  # Usar EasyOCR em vez de Tesseract
   use_easyocr: false
-
-  # Caminho do executável Tesseract (vazio = PATH do sistema)
   tesseract_cmd: ""
-
-  # Regiões de leitura (x, y, largura, altura)
-  pot_region: "360,255,180,54"
-  stack_region: "330,610,220,56"
-  call_region: "450,690,180,54"
-
-  # Limites de valor (evitar lixo do OCR)
+  pot_region: 262,384,44,18
+  stack_region: 330,610,220,56
+  call_region: 450,690,180,54
   pot_min: 0.0
   pot_max: 200000.0
   stack_min: 0.0
   stack_max: 500000.0
   call_min: 0.0
   call_max: 50000.0
-
-  # Frames de confirmação antes de aceitar uma mudança brusca
   confirm_frames: 2
-
-  # Threshold de estabilidade de tela (0.0 – 1.0)
   screen_stability_threshold: 0.01
-
-# ── GhostMouse: movimento humanizado ─────────────────────────────────────
+  pot_box:
+    x: 262
+    y: 384
+    w: 44
+    h: 18
 ghost_mouse:
-  # Ativar controle real do mouse (false = dry run)
   enabled: false
-
-  # Espalhamento dos pontos de controle Bézier (% da distância)
   control_point_spread: 0.35
-
-  # Amplitude do ruído gaussiano (pixels)
   noise_amplitude: 3.0
-
-  # Pontos de interpolação por 100px
   steps_per_100px: 18
-
-  # Timing por dificuldade (segundos: [min, max])
-  timing_easy: [0.8, 1.5]
-  timing_medium: [2.0, 4.0]
-  timing_hard: [4.0, 12.0]
-
-  # Duração do clique (segundos: [min, max])
-  click_hold: [0.04, 0.12]
-
-  # Duração do movimento por 100px (segundos)
+  timing_easy:
+    - 0.8
+    - 1.5
+  timing_medium:
+    - 2.0
+    - 4.0
+  timing_hard:
+    - 4.0
+    - 12.0
+  click_hold:
+    - 0.04
+    - 0.12
   move_duration_per_100px: 0.06
-
-# ── Botões de ação: coordenadas padrão ───────────────────────────────────
 action_buttons:
-  fold: [600, 700]
-  call: [800, 700]
-  raise_small: [1000, 700]
-  raise_big: [1000, 700]
-
-# ── Servidor ZMQ e Redis ─────────────────────────────────────────────────
+  fold:
+    - 99
+    - 990
+  call:
+    - 286
+    - 990
+  raise_small:
+    - 460
+    - 989
+  raise_big:
+    - 460
+    - 989
 server:
-  zmq_bind: "tcp://0.0.0.0:5555"
-  zmq_server: "tcp://127.0.0.1:5555"
-  redis_url: "redis://127.0.0.1:6379/0"
-
-# ── Agente: ciclo, timing e identidade ───────────────────────────────────
+  zmq_bind: tcp://0.0.0.0:5555
+  zmq_server: tcp://127.0.0.1:5555
+  redis_url: redis://127.0.0.1:6379/0
 agent:
-  # ID do agente (string, ex: "01", "02")
   agent_id: "01"
-
-  # ID da mesa lógica
-  table_id: "table_default"
-
-  # Intervalo entre ciclos de decisão (segundos)
+  table_id: table_default
   heartbeat_seconds: 1.0
-
-  # Timeout ZMQ (milissegundos)
   timeout_ms: 1500
-
-  # Limite de ciclos (0 = ilimitado)
   max_cycles: 0
-
-  # Usar visão mock (true = modo de treino)
   use_mock_vision: false
-
-  # Cenário mock: A | B | ALT
-  mock_vision_scenario: "ALT"
-
-# ── Logging ──────────────────────────────────────────────────────────────
+  mock_vision_scenario: ALT
 logging:
-  # Diretório dos logs JSONL
-  log_dir: "reports/logs"
-
-  # Desativar cores no terminal
+  log_dir: reports/logs
   no_color: false
-
-  # Desativar log em arquivo
   disable_file_log: false
+action_coordinates:
+  fold:
+    x: 99
+    y: 990
+  call:
+    x: 286
+    y: 990
+  raise:
+    x: 460
+    y: 989
