@@ -23,3 +23,6 @@ reports/logs_mock_e2e/
 data/raw/
 data/to_annotate/
 datasets/
+models/*.pt
+runs/
+yolov8n.pt
