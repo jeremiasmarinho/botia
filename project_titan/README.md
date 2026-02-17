@@ -183,6 +183,29 @@ O launcher detecta automaticamente o `.venv` do projeto e inicia HiveBrain + N a
 
 Ctrl+C no terminal PowerShell encerra todos os processos.
 
+## Calibração visual interativa (Clube)
+
+Para calibrar sem editar YAML manualmente, use o Cockpit com imagem de referência:
+
+- `python titan_control.py --config config_club.yaml --image_path club_table_reference.png`
+- No menu: `9. Calibrador Visual (Rato)`
+
+Fluxo guiado do calibrador:
+
+- Selecionar área das cartas do Hero
+- Selecionar área do Board
+- Selecionar área do Pote (OCR)
+- Clicar no centro dos botões `FOLD`, `CALL`, `RAISE`
+
+O script `tools/visual_calibrator.py` atualiza automaticamente o `config_club.yaml`
+com coordenadas de OCR e botões.
+
+Para iniciar o squad usando essa geometria segregada:
+
+- `./scripts/start_squad.ps1 -ClubMode`
+
+Com `-ClubMode`, o launcher define `TITAN_CONFIG_FILE=config_club.yaml`.
+
 ## Smoke test rápido (recomendado)
 
 - `python -m orchestrator.healthcheck`
