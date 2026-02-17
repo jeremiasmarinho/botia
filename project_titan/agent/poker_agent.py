@@ -184,10 +184,33 @@ class PokerAgent:
                 key=key,
                 fallback=updated.get(key, 0.0),
             )
-            updated[key] = max(0.0, float(value))
+            updated[key] = self._sanitize_ocr_value(
+                key=key,
+                candidate=max(0.0, float(value)),
+                previous=updated.get(key, 0.0),
+            )
 
         self._ocr_last_values = updated
         return updated
+
+    def _sanitize_ocr_value(self, key: str, candidate: float, previous: float) -> float:
+        """Filter noisy OCR values by bounds and max-delta guards."""
+        limits = self.ocr_config.value_limits()
+        deltas = self.ocr_config.max_deltas()
+
+        min_value, max_value = limits.get(key, (0.0, 1_000_000.0))
+        safe_candidate = max(0.0, float(candidate))
+        safe_previous = max(0.0, float(previous))
+
+        if safe_candidate < min_value or safe_candidate > max_value:
+            return safe_previous
+
+        max_delta = float(deltas.get(key, 0.0))
+        if max_delta > 0 and safe_previous > 0:
+            if abs(safe_candidate - safe_previous) > max_delta:
+                return safe_previous
+
+        return safe_candidate
 
     # ── Calibration cache helpers ───────────────────────────────────
 

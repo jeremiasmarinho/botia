@@ -8,6 +8,7 @@ os valores lidos para facilitar calibração de `pot`, `hero_stack` e
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -46,6 +47,17 @@ def _draw_overlay(frame, regions: dict[str, tuple[int, int, int, int]], values: 
     return canvas
 
 
+def _save_regions_file(filepath: str, regions: dict[str, tuple[int, int, int, int]]) -> None:
+    payload = {
+        "pot": list(regions.get("pot", (360, 255, 180, 54))),
+        "hero_stack": list(regions.get("hero_stack", (330, 610, 220, 56))),
+        "call_amount": list(regions.get("call_amount", (450, 690, 180, 54))),
+    }
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as file_stream:
+        json.dump(payload, file_stream, ensure_ascii=False, indent=2)
+
+
 def main() -> int:
     args = _parse_args()
 
@@ -69,7 +81,13 @@ def main() -> int:
         return 1
 
     print(f"[calibrate_ocr] emulator={vision.emulator!r}")
-    print(f"[calibrate_ocr] regions={config.regions()}")
+    regions = config.regions()
+    print(f"[calibrate_ocr] regions={regions}")
+
+    regions_file = (config.regions_file or "").strip()
+    if regions_file:
+        _save_regions_file(regions_file, regions)
+        print(f"[calibrate_ocr] regions_saved={regions_file}")
 
     save_path = args.save.strip()
     if not save_path:
@@ -86,7 +104,6 @@ def main() -> int:
             print("[calibrate_ocr] failed to capture frame")
             return 1
 
-        regions = config.regions()
         values: dict[str, float] = {}
         for key, (x, y, w, h) in regions.items():
             crop = frame[y:y + h, x:x + w]

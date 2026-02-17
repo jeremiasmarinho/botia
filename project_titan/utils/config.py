@@ -69,7 +69,19 @@ class OCRRuntimeConfig:
     pot_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_POT_REGION", "360,255,180,54"))
     stack_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_STACK_REGION", "330,610,220,56"))
     call_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_CALL_REGION", "450,690,180,54"))
+    regions_file: str = field(default_factory=lambda: os.getenv("TITAN_OCR_REGIONS_FILE", os.path.join("reports", "ocr_regions_latest.json")).strip())
     regions_json: str = field(default_factory=lambda: os.getenv("TITAN_OCR_REGIONS_JSON", "").strip())
+
+    pot_min: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_POT_MIN", "0")))
+    pot_max: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_POT_MAX", "200000")))
+    stack_min: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_STACK_MIN", "0")))
+    stack_max: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_STACK_MAX", "500000")))
+    call_min: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_CALL_MIN", "0")))
+    call_max: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_CALL_MAX", "50000")))
+
+    pot_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_POT_MAX_DELTA", "25000")))
+    stack_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_STACK_MAX_DELTA", "75000")))
+    call_max_delta: float = field(default_factory=lambda: float(os.getenv("TITAN_OCR_CALL_MAX_DELTA", "5000")))
 
     @staticmethod
     def _parse_region(value: str) -> tuple[int, int, int, int] | None:
@@ -87,25 +99,11 @@ class OCRRuntimeConfig:
             return None
         return (max(0, x), max(0, y), w, h)
 
-    def regions(self) -> dict[str, tuple[int, int, int, int]]:
-        """Return effective OCR regions keyed by metric name."""
-        default_regions = {
-            "pot": self._parse_region(self.pot_region) or (360, 255, 180, 54),
-            "hero_stack": self._parse_region(self.stack_region) or (330, 610, 220, 56),
-            "call_amount": self._parse_region(self.call_region) or (450, 690, 180, 54),
-        }
-
-        if not self.regions_json:
-            return default_regions
-
-        try:
-            payload = json.loads(self.regions_json)
-        except Exception:
-            return default_regions
-
-        if not isinstance(payload, dict):
-            return default_regions
-
+    @staticmethod
+    def _merge_region_payload(
+        regions: dict[str, tuple[int, int, int, int]],
+        payload: dict[str, object],
+    ) -> dict[str, tuple[int, int, int, int]]:
         for key in ("pot", "hero_stack", "call_amount"):
             raw_region = payload.get(key)
             if isinstance(raw_region, list) and len(raw_region) == 4:
@@ -114,6 +112,60 @@ class OCRRuntimeConfig:
                 except (TypeError, ValueError):
                     continue
                 if w > 0 and h > 0:
-                    default_regions[key] = (max(0, x), max(0, y), w, h)
+                    regions[key] = (max(0, x), max(0, y), w, h)
+        return regions
 
-        return default_regions
+    def value_limits(self) -> dict[str, tuple[float, float]]:
+        return {
+            "pot": (float(self.pot_min), float(self.pot_max)),
+            "hero_stack": (float(self.stack_min), float(self.stack_max)),
+            "call_amount": (float(self.call_min), float(self.call_max)),
+        }
+
+    def max_deltas(self) -> dict[str, float]:
+        return {
+            "pot": float(self.pot_max_delta),
+            "hero_stack": float(self.stack_max_delta),
+            "call_amount": float(self.call_max_delta),
+        }
+
+    def regions(self) -> dict[str, tuple[int, int, int, int]]:
+        """Return effective OCR regions keyed by metric name."""
+        default_regions = {
+            "pot": (360, 255, 180, 54),
+            "hero_stack": (330, 610, 220, 56),
+            "call_amount": (450, 690, 180, 54),
+        }
+        resolved_regions = dict(default_regions)
+
+        regions_file = (self.regions_file or "").strip()
+        if regions_file and os.path.exists(regions_file):
+            try:
+                with open(regions_file, "r", encoding="utf-8") as file_stream:
+                    payload = json.load(file_stream)
+                if isinstance(payload, dict):
+                    resolved_regions = self._merge_region_payload(resolved_regions, payload)
+            except Exception:
+                pass
+
+        env_regions = {
+            "pot": self._parse_region(self.pot_region),
+            "hero_stack": self._parse_region(self.stack_region),
+            "call_amount": self._parse_region(self.call_region),
+        }
+        for key, region in env_regions.items():
+            if region is not None:
+                resolved_regions[key] = region
+
+        if not self.regions_json:
+            return resolved_regions
+
+        try:
+            payload = json.loads(self.regions_json)
+        except Exception:
+            return resolved_regions
+
+        if not isinstance(payload, dict):
+            return resolved_regions
+
+        return self._merge_region_payload(resolved_regions, payload)
