@@ -63,6 +63,14 @@ vision:
   # Modo fail-fast: aborta se modelo não carregar
   fail_fast: false
 
+  # ROI manual de referência (útil para calibração visual em imagem estática)
+  # Não substitui automaticamente a ROI do emulador; serve como preset/documentação.
+  roi:
+    left: 0
+    top: 0
+    width: 0
+    height: 0
+
 # ── Visual Overlay: janela de debug "Visão do Exterminador" ──────────────
 overlay:
   # Ativar janela de debug overlay (true/false)
@@ -91,6 +99,12 @@ overlay:
 
   # FPS máximo de atualização do overlay
   max_fps: 10
+
+  # Mostrar grade de pixels para calibração manual (debug)
+  show_grid: false
+
+  # Tamanho da célula da grade (pixels)
+  grid_size: 50
 
 # ── OCR: leitura de pot, stack e call ─────────────────────────────────────
 ocr:

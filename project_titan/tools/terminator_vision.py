@@ -168,10 +168,14 @@ class TerminatorVision:
         self,
         max_fps: int = 10,
         hud_width: int = 320,
+        show_grid: bool = False,
+        grid_size: int = 50,
         window_name: str = "TITAN: Visao do Exterminador",
     ) -> None:
         self._max_fps = max(1, max_fps)
         self._hud_width = max(100, hud_width)
+        self._show_grid = bool(show_grid)
+        self._grid_size = max(10, int(grid_size))
         self._window_name = window_name
         self._state = _OverlayState()
         self._lock = threading.Lock()
@@ -340,6 +344,10 @@ class TerminatorVision:
         # 4. Barra de status no topo do frame
         self._draw_status_bar(frame, state)
 
+        # 4.1 Grid opcional para calibração manual de coordenadas
+        if self._show_grid:
+            self._draw_grid(frame)
+
         # 5. Compõe HUD lateral
         canvas = np.zeros((h, w + self._hud_width, 3), dtype=np.uint8)
         canvas[:, :w] = frame
@@ -465,6 +473,44 @@ class TerminatorVision:
         )
         cv2.putText(frame, text, (8, 19),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, action_color, 1, cv2.LINE_AA)
+
+    def _draw_grid(self, frame: Any) -> None:
+        """Desenha grade de pixels para facilitar calibração X/Y/W/H."""
+        h, w = frame.shape[:2]
+        step = self._grid_size
+        minor_color = (70, 70, 70)
+        major_color = (120, 120, 120)
+        text_color = (170, 170, 170)
+
+        for x in range(0, w, step):
+            color = major_color if (x // step) % 2 == 0 else minor_color
+            cv2.line(frame, (x, 0), (x, h), color, 1)
+            if x % (step * 2) == 0:
+                cv2.putText(
+                    frame,
+                    str(x),
+                    (x + 2, min(h - 6, 16)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    text_color,
+                    1,
+                    cv2.LINE_AA,
+                )
+
+        for y in range(0, h, step):
+            color = major_color if (y // step) % 2 == 0 else minor_color
+            cv2.line(frame, (0, y), (w, y), color, 1)
+            if y % (step * 2) == 0:
+                cv2.putText(
+                    frame,
+                    str(y),
+                    (4, max(12, y - 2)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    text_color,
+                    1,
+                    cv2.LINE_AA,
+                )
 
     # ── HUD lateral ───────────────────────────────────────────────
 

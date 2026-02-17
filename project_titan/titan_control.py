@@ -14,18 +14,24 @@ Uso::
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from utils.titan_config import cfg
 
 # Resolve raiz do projeto (onde config.yaml vive)
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR if (_SCRIPT_DIR / "config.yaml").exists() else _SCRIPT_DIR.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+_CLI_IMAGE_PATH: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -138,6 +144,20 @@ def _run_command(cmd: list[str], env_overrides: dict[str, str] | None = None) ->
     except FileNotFoundError:
         print(f"{_RED}Comando nao encontrado: {cmd[0]}{_RESET}")
         return 1
+
+
+def _parse_cli_args() -> argparse.Namespace:
+    """Parseia argumentos CLI opcionais do Cockpit."""
+    parser = argparse.ArgumentParser(
+        description="Project Titan Cockpit",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--image_path",
+        default="",
+        help="Caminho de imagem estática para calibração no menu 8",
+    )
+    return parser.parse_args()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -398,11 +418,13 @@ def _action_overlay_standalone() -> None:
     """Abre overlay standalone numa imagem."""
     print(_c(_MAGENTA, "\n=== OVERLAY STANDALONE ===\n"))
 
-    image = input("  Caminho da imagem (ou Enter para frame ao vivo): ").strip()
+    prompt_default = _CLI_IMAGE_PATH or ""
+    if prompt_default:
+        print(f"  Dica: --image_path ativo = {prompt_default}")
+    image = input("  Caminho da imagem (ou Enter para frame ao vivo): ").strip() or prompt_default
 
     if image:
-        python = _find_python()
-        _run_command([python, "-m", "tools.visual_overlay", "--image", image])
+        _preview_static_overlay(image)
     else:
         print("  Capturando frame ao vivo do emulador...\n")
         python = _find_python()
@@ -418,6 +440,85 @@ def _action_overlay_standalone() -> None:
             "cv2.destroyAllWindows() if f is not None else None"
         )
         _run_command([python, "-c", code])
+
+
+def _preview_static_overlay(image_path: str) -> None:
+    """Abre uma imagem estática no Terminator Vision para calibração.
+
+    Renderiza no frame:
+      - Pontos de `action_buttons` do config.yaml
+      - Regiões OCR (`pot`, `hero_stack`, `call_amount`)
+      - Grid opcional (`overlay.show_grid`)
+    """
+    try:
+        import cv2  # type: ignore[import-untyped]
+    except ImportError:
+        print(_c(_RED, "  OpenCV nao encontrado. Instale: pip install opencv-python\n"))
+        return
+
+    from tools.terminator_vision import TerminatorVision
+    from utils.config import OCRRuntimeConfig
+
+    image_candidate = Path(image_path)
+    if not image_candidate.is_absolute():
+        image_candidate = (_PROJECT_ROOT / image_candidate).resolve()
+
+    if not image_candidate.exists():
+        print(_c(_RED, f"  Imagem nao encontrada: {image_candidate}\n"))
+        return
+
+    frame = cv2.imread(str(image_candidate))
+    if frame is None:
+        print(_c(_RED, f"  Falha ao abrir imagem: {image_candidate}\n"))
+        return
+
+    action_buttons_cfg = cfg.get_dict("action_buttons")
+    action_points: dict[str, tuple[int, int]] = {}
+    for action_name in ("fold", "call", "raise_small", "raise_big"):
+        raw = action_buttons_cfg.get(action_name)
+        if isinstance(raw, list) and len(raw) == 2:
+            try:
+                action_points[action_name] = (int(raw[0]), int(raw[1]))
+            except (TypeError, ValueError):
+                continue
+
+    ocr_regions = OCRRuntimeConfig().regions()
+
+    snapshot = SimpleNamespace(
+        hero_cards=[],
+        board_cards=[],
+        dead_cards=[],
+        pot=0.0,
+        stack=0.0,
+        call_amount=0.0,
+        active_players=0,
+        is_my_turn=False,
+        action_points=action_points,
+    )
+
+    overlay = TerminatorVision(
+        max_fps=cfg.get_int("overlay.max_fps", 10),
+        hud_width=cfg.get_int("overlay.hud_width", 320),
+        show_grid=cfg.get_bool("overlay.show_grid", False),
+        grid_size=cfg.get_int("overlay.grid_size", 50),
+        window_name="TITAN: Calibracao Estatica",
+    )
+    overlay.update_frame(frame)
+    overlay.update_snapshot(snapshot)
+    overlay.update_ocr_regions(ocr_regions)
+    overlay.update_decision("wait", cycle_id=0, cycle_ms=0.0, equity=0.0, spr=99.0, street="preflop")
+
+    print(_c(_CYAN, "  Preview estático aberto. Pressione Q na janela para fechar."))
+    print(_c(_CYAN, "  Dica: edite config.yaml e reabra a opção 8 para validar alinhamento.\n"))
+
+    overlay.start()
+    try:
+        while overlay.is_running:
+            time.sleep(0.15)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        overlay.stop()
 
 
 def _action_show_config() -> None:
@@ -503,6 +604,11 @@ def _print_menu() -> None:
 
 def main() -> None:
     """Loop principal do Cockpit."""
+    global _CLI_IMAGE_PATH
+
+    args = _parse_cli_args()
+    _CLI_IMAGE_PATH = str(args.image_path or "").strip()
+
     _enable_ansi()
     os.chdir(str(_PROJECT_ROOT))
 

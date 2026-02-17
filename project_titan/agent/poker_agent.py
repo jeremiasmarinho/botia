@@ -185,6 +185,8 @@ class PokerAgent:
             self._overlay = TerminatorVision(
                 max_fps=cfg.get_int("overlay.max_fps", 10),
                 hud_width=cfg.get_int("overlay.hud_width", 320),
+                show_grid=cfg.get_bool("overlay.show_grid", False),
+                grid_size=cfg.get_int("overlay.grid_size", 50),
             )
 
         # Restore calibration from file on startup
