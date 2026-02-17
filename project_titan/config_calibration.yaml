@@ -1,0 +1,75 @@
+# Project Titan - Perfil Inicial de Calibracao
+# Objetivo: ponto de partida para alinhar geometria em menos de 2 minutos.
+# Base de referencia: layout full-HD (1920x1080).
+# Estrategia: ajustar apenas offset global (dx/dy) e, se preciso, pequenos refinos.
+
+profile:
+  name: "calibration_quickstart_fhd"
+  reference_resolution: [1920, 1080]
+  notes: "Use como baseline; ajuste offset antes de mexer em largura/altura"
+
+# Offsets globais de calibracao manual (nao aplicados automaticamente pelo runtime)
+# Regra sugerida:
+# - deslocou tudo para a direita/esquerda? ajuste dx
+# - deslocou tudo para cima/baixo? ajuste dy
+calibration:
+  offset_dx: 0
+  offset_dy: 0
+
+overlay:
+  enabled: true
+  show_grid: true
+  grid_size: 20
+  max_fps: 10
+  hud_width: 320
+  min_confidence: 0.25
+
+vision:
+  emulator_title: "LDPlayer"
+  confidence_threshold: 0.35
+  # bordas comuns do LDPlayer (ajuste se houver toolbar diferente)
+  chrome_top: 35
+  chrome_bottom: 0
+  chrome_left: 0
+  chrome_right: 38
+
+  # ROI de referencia da area da mesa (preset para documentacao/calibracao)
+  roi:
+    left: 0
+    top: 0
+    width: 1920
+    height: 1080
+
+ocr:
+  enabled: true
+  # x,y,w,h - caixas intencionalmente "apertadas" para reduzir ruido
+  pot_region: "900,245,120,42"
+  stack_region: "860,900,180,46"
+  call_region: "1055,930,145,44"
+
+  # guardrails anti-ruido
+  pot_min: 0.0
+  pot_max: 200000.0
+  stack_min: 0.0
+  stack_max: 500000.0
+  call_min: 0.0
+  call_max: 50000.0
+
+action_buttons:
+  # Pontos centrais de clique (mais seguros que borda)
+  fold: [860, 955]
+  call: [1010, 955]
+  raise_small: [1160, 955]
+  raise_big: [1310, 955]
+
+# Action Boxes de referencia para auditoria visual (80% do botao visual)
+# Ainda que o runtime atual clique por ponto, use estas caixas para validar margem.
+action_boxes:
+  fold: [820, 925, 80, 48]
+  call: [970, 925, 80, 48]
+  raise_small: [1120, 925, 80, 48]
+  raise_big: [1270, 925, 80, 48]
+
+# Formula manual para ajustar rapido com offset:
+# novo_x = x_base + calibration.offset_dx
+# novo_y = y_base + calibration.offset_dy

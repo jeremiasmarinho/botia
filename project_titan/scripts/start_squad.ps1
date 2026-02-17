@@ -27,7 +27,8 @@ param(
     [switch]$UseMockVision,
     [switch]$CollectData,
     [switch]$EnduranceMode,
-    [switch]$Overlay
+    [switch]$Overlay,
+    [switch]$ClubMode
 )
 
 Set-StrictMode -Version Latest
@@ -60,6 +61,7 @@ Write-Host "MockVision: $(if ($UseMockVision) { 'ON' } else { 'OFF' })"
 Write-Host "CollectData: $(if ($CollectData) { 'ON' } else { 'OFF' })"
 Write-Host "Endurance : $(if ($EnduranceMode) { 'ON' } else { 'OFF' })"
 Write-Host "Overlay   : $(if ($Overlay) { 'ON' } else { 'OFF' })"
+Write-Host "ClubMode  : $(if ($ClubMode) { 'ON' } else { 'OFF' })"
 Write-Host ""
 
 # -------------------------------------------------------------------
@@ -115,6 +117,17 @@ else {
     $env:TITAN_OVERLAY_ENABLED = "0"
     if ($agentEnv.ContainsKey("TITAN_OVERLAY_ENABLED")) {
         $agentEnv.Remove("TITAN_OVERLAY_ENABLED")
+    }
+}
+
+if ($ClubMode) {
+    $env:TITAN_CONFIG_FILE = "config_club.yaml"
+    $agentEnv["TITAN_CONFIG_FILE"] = "config_club.yaml"
+    Write-Host "MODO CLUBE ATIVO: Usando geometria personalizada" -ForegroundColor Magenta
+}
+else {
+    if ($agentEnv.ContainsKey("TITAN_CONFIG_FILE")) {
+        $agentEnv.Remove("TITAN_CONFIG_FILE")
     }
 }
 

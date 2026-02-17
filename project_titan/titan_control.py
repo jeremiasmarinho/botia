@@ -32,6 +32,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 _CLI_IMAGE_PATH: str = ""
+_CLI_CONFIG_PATH: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -157,7 +158,31 @@ def _parse_cli_args() -> argparse.Namespace:
         default="",
         help="Caminho de imagem estática para calibração no menu 8",
     )
+    parser.add_argument(
+        "--config",
+        default="",
+        help="Arquivo de configuração YAML (ex: config_club.yaml)",
+    )
     return parser.parse_args()
+
+
+def _apply_runtime_config(config_path: str) -> None:
+    """Define ``TITAN_CONFIG_FILE`` e recarrega o loader central."""
+    normalized = str(config_path or "").strip()
+    if not normalized:
+        return
+
+    cfg_candidate = Path(normalized)
+    if not cfg_candidate.is_absolute():
+        cfg_candidate = (_PROJECT_ROOT / cfg_candidate).resolve()
+
+    if not cfg_candidate.exists():
+        print(_c(_RED, f"  Config nao encontrado: {cfg_candidate}"))
+        return
+
+    os.environ["TITAN_CONFIG_FILE"] = str(cfg_candidate)
+    cfg.reload()
+    print(_c(_MAGENTA, f"  Config ativo: {cfg_candidate.name}"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -418,6 +443,33 @@ def _action_overlay_standalone() -> None:
     """Abre overlay standalone numa imagem."""
     print(_c(_MAGENTA, "\n=== OVERLAY STANDALONE ===\n"))
 
+    club_image = _PROJECT_ROOT / "club_table_reference.png"
+    club_config = _PROJECT_ROOT / "config_club.yaml"
+
+    if club_image.exists():
+        use_club = input(
+            "Detectei imagem de Clube. Deseja calibrar usando "
+            "'club_table_reference.png' e 'config_club.yaml'? [S/N] "
+        ).strip().lower()
+        if use_club in ("s", "sim", "y", "yes"):
+            previous_config = os.getenv("TITAN_CONFIG_FILE", "")
+            if club_config.exists():
+                os.environ["TITAN_CONFIG_FILE"] = "config_club.yaml"
+                cfg.reload()
+                print(_c(_MAGENTA, "  Modo Clube: usando config_club.yaml"))
+            else:
+                print(_c(_YELLOW, "  Aviso: config_club.yaml não encontrado; usando config atual."))
+
+            try:
+                _preview_static_overlay(str(club_image))
+            finally:
+                if previous_config:
+                    os.environ["TITAN_CONFIG_FILE"] = previous_config
+                elif "TITAN_CONFIG_FILE" in os.environ:
+                    os.environ.pop("TITAN_CONFIG_FILE")
+                cfg.reload()
+            return
+
     prompt_default = _CLI_IMAGE_PATH or ""
     if prompt_default:
         print(f"  Dica: --image_path ativo = {prompt_default}")
@@ -555,6 +607,35 @@ def _action_show_config() -> None:
         print(f"  {_RED}Erro ao ler config: {e}{_RESET}\n")
 
 
+def _action_visual_calibrator() -> None:
+    """Abre calibrador visual interativo com mouse (OpenCV)."""
+    print(_c(_MAGENTA, "\n=== CALIBRADOR VISUAL (RATO) ===\n"))
+
+    image_default = _CLI_IMAGE_PATH or os.getenv("TITAN_IMAGE_PATH", "").strip() or "club_table_reference.png"
+    if image_default:
+        print(f"  Dica: imagem padrão ativa = {image_default}")
+    image_value = input("  Caminho da imagem (Enter para padrão): ").strip() or image_default
+
+    config_default = _CLI_CONFIG_PATH or os.getenv("TITAN_CONFIG_FILE", "").strip() or "config_club.yaml"
+    print(f"  Config alvo padrão: {config_default}")
+    config_value = input("  Config YAML alvo (Enter para padrão): ").strip() or config_default
+
+    if not image_value:
+        print(_c(_RED, "  Nenhuma imagem informada. Use --image_path ou TITAN_IMAGE_PATH.\n"))
+        return
+
+    python = _find_python()
+    _run_command([
+        python,
+        "-m",
+        "tools.visual_calibrator",
+        "--image",
+        image_value,
+        "--config",
+        config_value,
+    ])
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Menu Principal
 # ═══════════════════════════════════════════════════════════════════════════
@@ -568,6 +649,7 @@ _MENU_ITEMS = [
     ("6", "Ver Configuracao Atual", _action_show_config),
     ("7", "Editar config.yaml", _action_edit_config),
     ("8", "Overlay Standalone (Testar Visao)", _action_overlay_standalone),
+    ("9", "Calibrador Visual (Rato)", _action_visual_calibrator),
     ("0", "Sair", None),
 ]
 
@@ -604,13 +686,17 @@ def _print_menu() -> None:
 
 def main() -> None:
     """Loop principal do Cockpit."""
-    global _CLI_IMAGE_PATH
+    global _CLI_IMAGE_PATH, _CLI_CONFIG_PATH
 
     args = _parse_cli_args()
     _CLI_IMAGE_PATH = str(args.image_path or "").strip()
+    _CLI_CONFIG_PATH = str(args.config or "").strip()
 
     _enable_ansi()
     os.chdir(str(_PROJECT_ROOT))
+
+    if _CLI_CONFIG_PATH:
+        _apply_runtime_config(_CLI_CONFIG_PATH)
 
     while True:
         _print_banner()
