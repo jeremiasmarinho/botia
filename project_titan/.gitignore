@@ -15,3 +15,8 @@ mobile/.gradle/
 mobile/.python-for-android/
 
 reports/*.json
+reports/calibration_profiles/
+reports/logs/
+reports/logs_endurance/
+reports/logs_mock_cycle/
+reports/logs_mock_e2e/
