@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from utils.card_utils import card_to_pt, normalize_cards
 from utils.config import ServerConfig
 from utils.logger import TitanLogger
 
@@ -78,58 +79,9 @@ class HiveBrain:
     def _session_key(self, table_id: str, agent_id: str) -> str:
         return f"titan:squad:{table_id}:{agent_id}"
 
-    @staticmethod
-    def _normalize_cards(raw_cards: Any) -> list[str]:
-        if not isinstance(raw_cards, list):
-            return []
-
-        cards: list[str] = []
-        for item in raw_cards:
-            if not isinstance(item, str):
-                continue
-            card = item.strip().upper().replace("10", "T")
-            if len(card) != 2:
-                continue
-            rank = card[0]
-            suit = card[1].lower()
-            if rank not in "23456789TJQKA" or suit not in "cdhs":
-                continue
-            normalized = f"{rank}{suit}"
-            if normalized not in cards:
-                cards.append(normalized)
-        return cards
-
-    @staticmethod
-    def _card_to_pt(card: str) -> str | None:
-        token = str(card or "").strip().upper().replace("10", "T")
-        if len(token) != 2:
-            return None
-        rank_map = {
-            "A": "Ás",
-            "K": "Rei",
-            "Q": "Dama",
-            "J": "Valete",
-            "T": "Dez",
-            "9": "Nove",
-            "8": "Oito",
-            "7": "Sete",
-            "6": "Seis",
-            "5": "Cinco",
-            "4": "Quatro",
-            "3": "Três",
-            "2": "Dois",
-        }
-        suit_map = {
-            "H": "Copas",
-            "D": "Ouros",
-            "C": "Paus",
-            "S": "Espadas",
-        }
-        rank = rank_map.get(token[0])
-        suit = suit_map.get(token[1])
-        if rank is None or suit is None:
-            return None
-        return f"{rank} de {suit}"
+    # Card normalisation delegated to utils.card_utils
+    _normalize_cards = staticmethod(normalize_cards)
+    _card_to_pt = staticmethod(card_to_pt)
 
     def _prune_local_sessions(self) -> None:
         now = time.time()

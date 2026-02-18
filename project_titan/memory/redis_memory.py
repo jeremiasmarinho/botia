@@ -84,3 +84,41 @@ class RedisMemory:
             return default
 
         return self._cache.get(key, default)
+
+    def delete(self, key: str) -> bool:
+        """Remove *key*. Returns ``True`` if the key existed."""
+        if self._redis_client is not None:
+            return bool(self._redis_client.delete(key))
+        existed = key in self._cache
+        self._cache.pop(key, None)
+        self._expires_at.pop(key, None)
+        return existed
+
+    def exists(self, key: str) -> bool:
+        """Check whether *key* is present (and not expired)."""
+        if self._redis_client is not None:
+            return bool(self._redis_client.exists(key))
+        expires_at = self._expires_at.get(key)
+        if expires_at is not None and expires_at <= time.time():
+            self._cache.pop(key, None)
+            self._expires_at.pop(key, None)
+            return False
+        return key in self._cache
+
+    def keys(self, pattern: str = "*") -> list[str]:
+        """Return keys matching *pattern* (glob-style for Redis, prefix for memory)."""
+        if self._redis_client is not None:
+            return [k for k in self._redis_client.keys(pattern)]
+        # Simple prefix matching for in-memory backend
+        now = time.time()
+        prefix = pattern.rstrip("*")
+        result: list[str] = []
+        for key in list(self._cache):
+            exp = self._expires_at.get(key)
+            if exp is not None and exp <= now:
+                self._cache.pop(key, None)
+                self._expires_at.pop(key, None)
+                continue
+            if key.startswith(prefix):
+                result.append(key)
+        return result

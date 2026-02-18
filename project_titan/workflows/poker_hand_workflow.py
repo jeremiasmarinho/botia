@@ -341,42 +341,13 @@ class PokerHandWorkflow:
 
     # ── Card utilities ──────────────────────────────────────────────
 
-    @staticmethod
-    def _normalize_card(card: str) -> str | None:
-        """Normalise a card string to canonical ``Xs`` format."""
-        cleaned = card.strip().upper().replace("10", "T")
-        if len(cleaned) != 2:
-            return None
-        rank = cleaned[0]
-        suit = cleaned[1].lower()
-        if rank not in "23456789TJQKA" or suit not in "cdhs":
-            return None
-        return f"{rank}{suit}"
-
-    @classmethod
-    def _merge_dead_cards(cls, *sources: list[str]) -> list[str]:
-        """Merge and deduplicate dead cards from multiple sources."""
-        merged: list[str] = []
-        for source in sources:
-            for card in source:
-                normalized = cls._normalize_card(card)
-                if normalized is None:
-                    continue
-                if normalized not in merged:
-                    merged.append(normalized)
-        return merged
-
-    @staticmethod
-    def _street_from_board(board_cards: list[str]) -> str:
-        """Infer the current street from the number of community cards."""
-        board_count = len(board_cards)
-        if board_count >= 5:
-            return "river"
-        if board_count == 4:
-            return "turn"
-        if board_count >= 3:
-            return "flop"
-        return "preflop"
+    # Card utilities delegated to utils.card_utils
+    from utils.card_utils import normalize_card as _normalize_card_fn
+    from utils.card_utils import merge_dead_cards as _merge_fn
+    from utils.card_utils import street_from_board as _street_fn
+    _normalize_card = staticmethod(_normalize_card_fn)
+    _merge_dead_cards = staticmethod(_merge_fn)
+    _street_from_board = staticmethod(_street_fn)
 
     @staticmethod
     def _pot_odds(pot: float, stack: float) -> float:

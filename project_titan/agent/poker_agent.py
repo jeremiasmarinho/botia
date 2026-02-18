@@ -192,37 +192,9 @@ class PokerAgent:
         # Restore calibration from file on startup
         self._restore_action_calibration_file_cache()
 
-    @staticmethod
-    def _card_to_pt(card: str) -> str | None:
-        token = str(card or "").strip().upper().replace("10", "T")
-        if len(token) != 2:
-            return None
-        rank_map = {
-            "A": "Ás",
-            "K": "Rei",
-            "Q": "Dama",
-            "J": "Valete",
-            "T": "Dez",
-            "9": "Nove",
-            "8": "Oito",
-            "7": "Sete",
-            "6": "Seis",
-            "5": "Cinco",
-            "4": "Quatro",
-            "3": "Três",
-            "2": "Dois",
-        }
-        suit_map = {
-            "H": "Copas",
-            "D": "Ouros",
-            "C": "Paus",
-            "S": "Espadas",
-        }
-        rank = rank_map.get(token[0])
-        suit = suit_map.get(token[1])
-        if rank is None or suit is None:
-            return None
-        return f"{rank} de {suit}"
+    # Card display delegated to utils.card_utils
+    from utils.card_utils import card_to_pt as _card_to_pt_fn
+    _card_to_pt = staticmethod(_card_to_pt_fn)
 
     def _log_seen_cards(self, logger: TitanLogger, cards: list[str]) -> None:
         if not cards:
@@ -452,24 +424,9 @@ class PokerAgent:
         socket.connect(self.config.server_address)
         self._socket = socket
 
-    @staticmethod
-    def _normalize_cards(cards: list[str]) -> list[str]:
-        """Normalise and deduplicate a list of card strings."""
-        normalized: list[str] = []
-        for card in cards:
-            if not isinstance(card, str):
-                continue
-            token = card.strip().upper().replace("10", "T")
-            if len(token) != 2:
-                continue
-            rank = token[0]
-            suit = token[1].lower()
-            if rank not in "23456789TJQKA" or suit not in "cdhs":
-                continue
-            card_token = f"{rank}{suit}"
-            if card_token not in normalized:
-                normalized.append(card_token)
-        return normalized
+    # Card normalisation delegated to utils.card_utils
+    from utils.card_utils import normalize_cards as _normalize_cards_fn
+    _normalize_cards = staticmethod(_normalize_cards_fn)
 
     def _effective_active_players(self, snapshot: Any | None = None) -> int:
         """Determine active player count from snapshot → config → env-var."""

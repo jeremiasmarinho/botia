@@ -171,9 +171,11 @@ def select_action(
     raise_big_threshold += min(multiway_factor * 0.025, 0.12)
 
     # ── 5. Pot-odds adjustment ──────────────────────────────────────
-    call_threshold += min(pot_odds * 0.35, 0.08)
-    raise_small_threshold += min(pot_odds * 0.15, 0.05)
-    raise_big_threshold += min(pot_odds * 0.10, 0.04)
+    # Better pot odds → hero gets a better price to continue → LOWER
+    # thresholds (encourage calls/raises when the pot is laying good odds).
+    call_threshold -= min(pot_odds * 0.35, 0.08)
+    raise_small_threshold -= min(pot_odds * 0.15, 0.05)
+    raise_big_threshold -= min(pot_odds * 0.10, 0.04)
 
     # ── 6. SPR adjustment (committed stacks → loosen; deep → tighten) ──
     if street in {"turn", "river"} and spr <= 2.5:

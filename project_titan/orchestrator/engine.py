@@ -172,7 +172,6 @@ class Orchestrator:
             os.makedirs(report_dir, exist_ok=True)
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             millis = int((time.time() % 1) * 1000)
-            filename = f"run_report_{timestamp}.json"
             filename = f"run_report_{timestamp}_{millis:03d}.json"
             file_path = os.path.join(report_dir, filename)
             with open(file_path, "w", encoding="utf-8") as report_file:

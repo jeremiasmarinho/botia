@@ -68,6 +68,7 @@ class GhostMouseConfig:
     # Click parameters
     click_hold_min: float = 0.04
     click_hold_max: float = 0.12
+    click_jitter_px: float = 2.0  # max random offset in px applied to final click position
 
     # Movement duration (seconds per 100px distance)
     move_duration_per_100px: float = 0.06
@@ -284,7 +285,11 @@ class GhostMouse:
         à distância, depois segura o clique por um tempo aleatório
         para simular comportamento humano.
         """
-        assert pyautogui is not None
+        if pyautogui is None:
+            raise RuntimeError(
+                "PyAutoGUI is required for real mouse control. "
+                "Install it or set TITAN_GHOST_MOUSE=0."
+            )
 
         current_x, current_y = pyautogui.position()
         path = _generate_bezier_path(
@@ -304,7 +309,11 @@ class GhostMouse:
             pyautogui.moveTo(int(pt.x), int(pt.y), _pause=False)
             pyautogui.sleep(step_pause)
 
-        # Hold click for a human-like duration
+        # Hold click for a human-like duration with small positional jitter
+        jitter = self.config.click_jitter_px
+        final_x = int(target.x + gauss(0, jitter))
+        final_y = int(target.y + gauss(0, jitter))
+        pyautogui.moveTo(final_x, final_y, _pause=False)
         hold = uniform(self.config.click_hold_min, self.config.click_hold_max)
         pyautogui.click(_pause=False)
         pyautogui.sleep(hold)

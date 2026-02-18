@@ -38,18 +38,9 @@ class EquityResult:
 class MathEngine:
     """Stateless Monte-Carlo equity calculator."""
 
-    @staticmethod
-    def _normalize_card(card: str) -> str | None:
-        """Normalise a card string to canonical ``Xs`` format."""
-        cleaned = card.strip().upper().replace("10", "T")
-        if len(cleaned) != 2:
-            return None
-
-        rank = cleaned[0]
-        suit = cleaned[1].lower()
-        if rank not in "23456789TJQKA" or suit not in "CDHScdhs":
-            return None
-        return f"{rank}{suit}"
+    # Card normalisation delegated to utils.card_utils
+    from utils.card_utils import normalize_card as _normalize_card_fn
+    _normalize_card = staticmethod(_normalize_card_fn)
 
     @classmethod
     def _parse_cards(cls, cards: Iterable[str]) -> list[int]:

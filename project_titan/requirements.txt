@@ -5,11 +5,13 @@ redis>=5.0
 ultralytics>=8.3
 mss>=9.0
 pyautogui>=0.9
-colorama>=0.4
 pywin32>=306; platform_system == "Windows"
 opencv-python>=4.10
 treys>=0.1.8
 pyyaml>=6.0
-pydirectinput>=1.0
 pytest>=8.2
 pytesseract>=0.3.10
+# Optional — uncomment when needed:
+# easyocr>=1.7          # alternative OCR backend (use_easyocr config)
+# pydirectinput>=1.0    # alternative input backend (planned)
+# colorama>=0.4         # not currently imported; logger uses raw ANSI
