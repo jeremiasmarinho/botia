@@ -1,10 +1,10 @@
 task: detect
 mode: train
-model: yolov8n.pt
+model: C:\botia\runs\detect\runs\detect\titan\weights\last.pt
 data: C:\botia\project_titan\training\data.yaml
 epochs: 100
 time: null
-patience: 20
+patience: 30
 batch: 16
 imgsz: 640
 save: true
@@ -24,7 +24,7 @@ single_cls: false
 rect: false
 cos_lr: false
 close_mosaic: 10
-resume: false
+resume: C:\botia\runs\detect\runs\detect\titan\weights\last.pt
 amp: true
 fraction: 1.0
 profile: false
@@ -77,7 +77,7 @@ momentum: 0.937
 weight_decay: 0.0005
 warmup_epochs: 3.0
 warmup_momentum: 0.8
-warmup_bias_lr: 0.1
+warmup_bias_lr: 0.0
 box: 7.5
 cls: 0.5
 dfl: 1.5
