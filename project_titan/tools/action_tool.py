@@ -76,6 +76,7 @@ class ActionTool:
         self._ghost = GhostMouse(GhostMouseConfig())
         self._regions = dict(_DEFAULT_ACTION_REGIONS)
         self._load_regions_from_env()
+        self._load_regions_from_config()
 
     # -- configuration -------------------------------------------------------
 
@@ -218,3 +219,41 @@ class ActionTool:
                     self._regions[action_name] = ClickPoint(x=int(parts[0]), y=int(parts[1]))
                 except ValueError:
                     pass
+
+    def _load_regions_from_config(self) -> None:
+        """Load button coordinates from config_club.yaml ``action_coordinates``.
+
+        This provides PPPoker-specific button positions that override the
+        generic defaults, ensuring clicks land on the correct screen areas.
+        Config values have lower priority than env-var overrides.
+        """
+        try:
+            from utils.titan_config import cfg
+        except Exception:
+            return
+
+        # action_coordinates section: {fold: {x, y}, call: {x, y}, raise: {x, y}}
+        for action_name in ("fold", "call", "raise"):
+            key = f"action_coordinates.{action_name}"
+            point = cfg.get_raw(key, None)
+            if isinstance(point, dict) and "x" in point and "y" in point:
+                # Only override if not already set by env var
+                env_key = f"TITAN_BTN_{action_name.upper()}"
+                if not os.getenv(env_key, "").strip():
+                    self._regions[action_name] = ClickPoint(
+                        x=int(point["x"]), y=int(point["y"]),
+                    )
+
+        # action_buttons section: {fold: [x,y], call: [x,y], raise_small: [x,y], raise_big: [x,y]}
+        for config_name, region_name in [
+            ("fold", "fold"), ("call", "call"),
+            ("raise_small", "raise"), ("raise_big", "raise"),
+        ]:
+            key = f"action_buttons.{config_name}"
+            point = cfg.get_raw(key, None)
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                env_key = f"TITAN_BTN_{region_name.upper()}"
+                if not os.getenv(env_key, "").strip():
+                    self._regions[region_name] = ClickPoint(
+                        x=int(point[0]), y=int(point[1]),
+                    )

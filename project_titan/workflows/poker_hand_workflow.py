@@ -730,6 +730,13 @@ class PokerHandWorkflow:
 
         # ── 13. Latency profiling ──────────────────────────────────
         _latency["total_ms"] = (time.perf_counter() - _t_cycle_start) * 1000
+
+        # Inject granular vision sub-phase timing from VisionTool
+        _vision_sub = getattr(self.vision, "last_timing", {})
+        if _vision_sub:
+            for k, v in _vision_sub.items():
+                _latency[f"vision.{k}"] = v
+
         _LATENCY_WARN_MS = float(os.getenv("TITAN_LATENCY_WARN_MS", "800"))
         self.memory.set("last_latency", {
             k: round(v, 2) for k, v in _latency.items()

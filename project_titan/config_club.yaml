@@ -69,7 +69,7 @@ ocr:
     w: 44
     h: 18
 ghost_mouse:
-  enabled: false
+  enabled: true
   control_point_spread: 0.35
   noise_amplitude: 3.0
   steps_per_100px: 18

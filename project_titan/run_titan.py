@@ -436,6 +436,21 @@ def main() -> int:
         env["TITAN_YOLO_MODEL"] = model_path
     if args.ghost_mouse:
         env["TITAN_GHOST_MOUSE"] = "1"
+    else:
+        # Auto-enable from config if ghost_mouse.enabled is true
+        for cfg_name in ("config_club.yaml", "config.yaml"):
+            cfg_path = os.path.join(project_dir, cfg_name)
+            if os.path.isfile(cfg_path) and _yaml is not None:
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        _cfg = _yaml.safe_load(_f)
+                    if isinstance(_cfg, dict):
+                        _gm = _cfg.get("ghost_mouse", {})
+                        if isinstance(_gm, dict) and _gm.get("enabled") is True:
+                            env["TITAN_GHOST_MOUSE"] = "1"
+                            break
+                except Exception:
+                    pass
 
     # ══════════════════════════════════════════════════════════════════
     # ETAPA 4/5: Iniciar HiveBrain (thread)

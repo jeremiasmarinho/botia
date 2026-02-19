@@ -63,6 +63,15 @@ class VisionTool:
 
     # ── Construction & model loading ────────────────────────────────
 
+    # ── Default PPPoker screen regions (Y thresholds) ─────────────
+    # These define the vertical zones on the PPPoker screen used to
+    # classify generic (un-prefixed) YOLO card detections as hero
+    # or board cards.  Loaded from config_club.yaml ``vision.regions``.
+    _DEFAULT_HERO_Y_MIN: int = 750   # hero cards Y range start
+    _DEFAULT_HERO_Y_MAX: int = 950   # hero cards Y range end
+    _DEFAULT_BOARD_Y_MIN: int = 350  # board cards Y range start
+    _DEFAULT_BOARD_Y_MAX: int = 550  # board cards Y range end
+
     def __init__(
         self,
         model_path: str | None = None,
@@ -89,8 +98,122 @@ class VisionTool:
         self._last_state_signature: str = ""
         self._card_reader = PPPokerCardReader()
 
+        # Granular timing breakdown (populated by _read_table_once)
+        self.last_timing: dict[str, float] = {}
+
+        # Load screen region thresholds from config for card zone assignment
+        self._load_card_regions()
+
         if self.model_path:
             self._load_model()
+
+    def _load_card_regions(self) -> None:
+        """Load hero/board Y-thresholds from config_club.yaml regions.
+
+        Falls back to class-level defaults if config is unavailable.
+        """
+        try:
+            from utils.titan_config import cfg
+            hero_area = cfg.get_raw("vision.regions.hero_area", None)
+            board_area = cfg.get_raw("vision.regions.board_area", None)
+
+            if isinstance(hero_area, dict) and "y" in hero_area:
+                y = int(hero_area["y"])
+                h = int(hero_area.get("h", 84))
+                self._hero_y_min = max(0, y - 50)   # allow some margin
+                self._hero_y_max = y + h + 50
+            else:
+                self._hero_y_min = self._DEFAULT_HERO_Y_MIN
+                self._hero_y_max = self._DEFAULT_HERO_Y_MAX
+
+            if isinstance(board_area, dict) and "y" in board_area:
+                y = int(board_area["y"])
+                h = int(board_area.get("h", 95))
+                self._board_y_min = max(0, y - 50)
+                self._board_y_max = y + h + 50
+            else:
+                self._board_y_min = self._DEFAULT_BOARD_Y_MIN
+                self._board_y_max = self._DEFAULT_BOARD_Y_MAX
+        except Exception:
+            self._hero_y_min = self._DEFAULT_HERO_Y_MIN
+            self._hero_y_max = self._DEFAULT_HERO_Y_MAX
+            self._board_y_min = self._DEFAULT_BOARD_Y_MIN
+            self._board_y_max = self._DEFAULT_BOARD_Y_MAX
+
+    @staticmethod
+    def _config_action_points() -> dict[str, tuple[int, int]]:
+        """Load button positions from config ``action_coordinates`` section.
+
+        Returns dict like ``{"fold": (99, 990), "call": (286, 990), ...}``.
+        Used as fallback when YOLO has no button classes.
+        """
+        try:
+            from utils.titan_config import cfg
+            result: dict[str, tuple[int, int]] = {}
+            for action_name in ("fold", "call", "raise"):
+                key = f"action_coordinates.{action_name}"
+                point = cfg.get_raw(key, None)
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    result[action_name] = (int(point["x"]), int(point["y"]))
+            # Also try action_buttons as fallback
+            if not result:
+                for action_name in ("fold", "call", "raise_small"):
+                    key = f"action_buttons.{action_name}"
+                    point = cfg.get_raw(key, None)
+                    if isinstance(point, (list, tuple)) and len(point) >= 2:
+                        mapped_name = action_name.replace("raise_small", "raise")
+                        result[mapped_name] = (int(point[0]), int(point[1]))
+            return result
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _detect_buttons_by_pixel(
+        frame: Any,
+        action_points: dict[str, tuple[int, int]],
+    ) -> bool:
+        """Check if PPPoker action buttons are visible by pixel sampling.
+
+        PPPoker buttons are coloured (green call, red fold, blue raise)
+        and sit at the bottom of the screen.  If the average saturation
+        at button positions is above a threshold, buttons are likely present.
+
+        Returns ``True`` if at least one button region appears to be a
+        coloured button (not background).
+        """
+        if frame is None:
+            return False
+        try:
+            import cv2
+            import numpy as np
+        except ImportError:
+            # Without cv2, assume buttons are present if hero cards exist
+            return True
+
+        h_frame, w_frame = frame.shape[:2]
+        if h_frame == 0 or w_frame == 0:
+            return False
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        sample_radius = 15
+        found = 0
+
+        for action_name, (bx, by) in action_points.items():
+            if action_name not in ("fold", "call", "raise"):
+                continue
+            x1 = max(0, int(bx) - sample_radius)
+            x2 = min(w_frame, int(bx) + sample_radius)
+            y1 = max(0, int(by) - sample_radius)
+            y2 = min(h_frame, int(by) + sample_radius)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            patch_s = hsv[y1:y2, x1:x2, 1]  # saturation channel
+            mean_sat = float(np.mean(patch_s))
+            # PPPoker buttons have high saturation (> 40); dark background < 20
+            if mean_sat > 35:
+                found += 1
+
+        return found >= 1
 
     def _load_model(self) -> None:
         """Lazy-load the YOLO model (called once on first use)."""
@@ -454,29 +577,26 @@ class VisionTool:
             elif bare_label in {"stack", "hero_stack", "my_stack"} and "stack_indicator" not in action_points:
                 action_points["stack_indicator"] = (int(item.center_x), int(item.center_y))
 
-        # ── Heuristic assignment of generic (un-prefixed) cards ─────
+        # ── Region-based assignment of generic (un-prefixed) cards ──
+        # Use absolute Y thresholds from config (PPPoker layout) instead
+        # of a relative average split, which fails when cards are only
+        # detected in one zone.
         if generic_cards:
-            if not hero_cards and not board_cards:
-                # Split by average Y position: lower half → hero, upper → board.
-                y_values = [card.center_y for card in generic_cards]
-                split_y = sum(y_values) / len(y_values)
-                for card in sorted(generic_cards, key=lambda item: item.center_x):
-                    _, card_token, _ = self._parse_label(card.label)
-                    if card_token is None:
-                        continue
-                    if card.center_y >= split_y and len(hero_cards) < 6:
-                        hero_cards.append(card_token)
-                    else:
-                        board_cards.append(card_token)
-            else:
-                for card in sorted(generic_cards, key=lambda item: item.center_x):
-                    _, card_token, _ = self._parse_label(card.label)
-                    if card_token is None:
-                        continue
-                    if len(hero_cards) < 6:
-                        hero_cards.append(card_token)
-                    else:
-                        board_cards.append(card_token)
+            for card in sorted(generic_cards, key=lambda item: item.center_x):
+                _, card_token, _ = self._parse_label(card.label)
+                if card_token is None:
+                    continue
+                cy = card.center_y
+                if self._hero_y_min <= cy <= self._hero_y_max and len(hero_cards) < 6:
+                    hero_cards.append(card_token)
+                elif self._board_y_min <= cy <= self._board_y_max and len(board_cards) < 5:
+                    board_cards.append(card_token)
+                elif cy > (self._hero_y_min + self._board_y_max) / 2 and len(hero_cards) < 6:
+                    # Below midpoint between board and hero zones → hero
+                    hero_cards.append(card_token)
+                elif len(board_cards) < 5:
+                    # Above midpoint → board
+                    board_cards.append(card_token)
 
         # ── Deduplicate and cap card lists ──────────────────────────
         hero_cards = self._dedupe_cards(hero_cards, max_size=6)
@@ -578,35 +698,57 @@ class VisionTool:
             if self._model is None:
                 return self._mark_state_change(self._fallback_snapshot())
 
+        _t = {"capture_ms": 0.0, "yolo_ms": 0.0, "ocr_fallback_ms": 0.0, "button_detect_ms": 0.0}
+
+        _t0 = time.perf_counter()
         frame = self._capture_frame()
+        _t["capture_ms"] = (time.perf_counter() - _t0) * 1000
         if frame is None:
+            self.last_timing = _t
             return self._mark_state_change(self._fallback_snapshot())
 
+        _t0 = time.perf_counter()
         try:
             results = self._model.predict(source=frame, verbose=False)
         except Exception:
+            _t["yolo_ms"] = (time.perf_counter() - _t0) * 1000
+            self.last_timing = _t
             return self._mark_state_change(self._fallback_snapshot())
+        _t["yolo_ms"] = (time.perf_counter() - _t0) * 1000
 
         if not results:
+            self.last_timing = _t
             return self._mark_state_change(self._fallback_snapshot())
 
         snapshot = self._extract_snapshot(results[0])
 
         # ── OCR card-reader fallback ───────────────────────────────
-        # YOLO detects UI elements well but fails on PPPoker cards.
-        # When buttons are found but no cards, use the OCR card reader.
-        has_buttons = bool(snapshot.action_points)
-        has_cards = bool(snapshot.hero_cards) or bool(snapshot.board_cards)
+        # The 52-class YOLO model only detects bare card tokens with no
+        # hero/board prefix, and may miss hero cards entirely (gold border
+        # in PPPoker).  Use the card reader whenever hero cards are still
+        # missing — regardless of whether buttons were detected.
+        has_hero = bool(snapshot.hero_cards)
 
-        if has_buttons and not has_cards and self._card_reader.enabled:
+        _t0 = time.perf_counter()
+        if not has_hero and self._card_reader.enabled:
+            # Build action_points with config-based button positions so
+            # the card reader can estimate hero/board regions even when
+            # YOLO did not detect buttons.
+            reader_action_points = dict(snapshot.action_points)
+            if not any(k in reader_action_points for k in ("fold", "call", "raise")):
+                reader_action_points = self._config_action_points()
+
             pot_xy = snapshot.action_points.get("pot_indicator")
             hero_cards, board_cards = self._card_reader.read_cards(
-                frame, snapshot.action_points, pot_xy,
+                frame, reader_action_points, pot_xy,
             )
-            if hero_cards or board_cards:
+            if hero_cards:
+                # Merge: prefer card-reader hero cards; keep YOLO board
+                # cards if card reader found none.
+                merged_board = board_cards if board_cards else list(snapshot.board_cards)
                 snapshot = TableSnapshot(
                     hero_cards=hero_cards,
-                    board_cards=board_cards,
+                    board_cards=merged_board,
                     pot=snapshot.pot,
                     stack=snapshot.stack,
                     call_amount=snapshot.call_amount,
@@ -618,7 +760,63 @@ class VisionTool:
                     is_my_turn=snapshot.is_my_turn,
                     state_changed=snapshot.state_changed,
                 )
+        _t["ocr_fallback_ms"] = (time.perf_counter() - _t0) * 1000
 
+        # ── Inject config-based action points & is_my_turn ─────────
+        _t0 = time.perf_counter()
+        # The 52-class YOLO model has no button classes; action_points
+        # will always be empty from YOLO alone.  Load button positions
+        # from config and detect presence via pixel sampling.
+        if not any(k in snapshot.action_points for k in ("fold", "call", "raise")):
+            config_points = self._config_action_points()
+            if config_points:
+                # Check if buttons are actually visible by sampling pixel
+                # brightness at the configured button positions.
+                buttons_visible = self._detect_buttons_by_pixel(
+                    frame, config_points,
+                )
+                if buttons_visible:
+                    merged_points = dict(snapshot.action_points)
+                    merged_points.update(config_points)
+                    snapshot = TableSnapshot(
+                        hero_cards=list(snapshot.hero_cards),
+                        board_cards=list(snapshot.board_cards),
+                        pot=snapshot.pot,
+                        stack=snapshot.stack,
+                        call_amount=snapshot.call_amount,
+                        dead_cards=list(snapshot.dead_cards),
+                        current_opponent=snapshot.current_opponent,
+                        active_players=max(snapshot.active_players, 1),
+                        action_points=merged_points,
+                        showdown_events=list(snapshot.showdown_events),
+                        is_my_turn=True,
+                        state_changed=snapshot.state_changed,
+                    )
+
+        # If we have hero cards but is_my_turn is still False,
+        # infer turn from having hero cards (we're in a hand).
+        if snapshot.hero_cards and not snapshot.is_my_turn:
+            config_points = self._config_action_points()
+            if config_points:
+                merged_points = dict(snapshot.action_points)
+                merged_points.update(config_points)
+                snapshot = TableSnapshot(
+                    hero_cards=list(snapshot.hero_cards),
+                    board_cards=list(snapshot.board_cards),
+                    pot=snapshot.pot,
+                    stack=snapshot.stack,
+                    call_amount=snapshot.call_amount,
+                    dead_cards=list(snapshot.dead_cards),
+                    current_opponent=snapshot.current_opponent,
+                    active_players=max(snapshot.active_players, 1),
+                    action_points=merged_points,
+                    showdown_events=list(snapshot.showdown_events),
+                    is_my_turn=True,
+                    state_changed=snapshot.state_changed,
+                )
+
+        _t["button_detect_ms"] = (time.perf_counter() - _t0) * 1000
+        self.last_timing = _t
         return self._mark_state_change(snapshot)
 
     def read_table(self) -> TableSnapshot:
