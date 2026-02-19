@@ -21,7 +21,7 @@
 # pois em PLO6 as cartas ficam sobrepostas (amontoadas).
 # ──────────────────────────────────────────────
 
-path: ../datasets # Relativo a training/ → project_titan/datasets
+path: F:/botia/project_titan/datasets
 train:
   - synthetic/images/train # Cartas (0-51)
   - titan_cards/images/train # UI Real (Botões, Pot, Stack)

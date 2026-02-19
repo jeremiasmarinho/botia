@@ -9,7 +9,7 @@ poker:
   simulations: 5000
   dynamic_simulations: true
 vision:
-  model_path: models/titan_v1.pt
+  model_path: models/titan_v7_hybrid.pt
   confidence_threshold: 0.35
   emulator_title: LDPlayer
   target_fps: 30

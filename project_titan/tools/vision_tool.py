@@ -45,6 +45,7 @@ from tools.vision_label_parser import (
     parse_showdown_label,
     parse_turn_label,
 )
+from tools.card_reader import PPPokerCardReader
 
 
 class VisionTool:
@@ -86,6 +87,7 @@ class VisionTool:
         self._model: Any | None = None
         self._load_error: str | None = None
         self._last_state_signature: str = ""
+        self._card_reader = PPPokerCardReader()
 
         if self.model_path:
             self._load_model()
@@ -397,6 +399,9 @@ class VisionTool:
                 if item.confidence >= previous_conf:
                     action_points[action_name] = (int(item.center_x), int(item.center_y))
                     action_confidence[action_name] = item.confidence
+                # If we see primary action buttons, it's hero's turn
+                if action_name in {"fold", "call", "raise"}:
+                    is_my_turn = True
                 continue
 
             active_players_value = self._parse_active_players_label(item.label)
@@ -433,12 +438,21 @@ class VisionTool:
                 continue
             if category == "pot" and numeric_value is not None:
                 detected_pot = numeric_value
+                # Store pot screen position for card-reader board region
+                action_points["pot_indicator"] = (int(item.center_x), int(item.center_y))
                 continue
             if category == "stack" and numeric_value is not None:
                 detected_stack = numeric_value
                 continue
             if category == "generic_card" and card_token is not None:
                 generic_cards.append(item)
+
+            # Bare "pot" / "stack" labels (no numeric suffix) — store position
+            bare_label = item.label.strip().lower()
+            if bare_label in {"pot", "pote"} and "pot_indicator" not in action_points:
+                action_points["pot_indicator"] = (int(item.center_x), int(item.center_y))
+            elif bare_label in {"stack", "hero_stack", "my_stack"} and "stack_indicator" not in action_points:
+                action_points["stack_indicator"] = (int(item.center_x), int(item.center_y))
 
         # ── Heuristic assignment of generic (un-prefixed) cards ─────
         if generic_cards:
@@ -547,7 +561,12 @@ class VisionTool:
         return latest
 
     def _read_table_once(self) -> TableSnapshot:
-        """Single-shot table read: simulation → model → fallback."""
+        """Single-shot table read: simulation → model → fallback.
+
+        After YOLO inference, if UI buttons are detected but no cards,
+        the :class:`PPPokerCardReader` is used as a fallback to read
+        cards via OCR + colour analysis.
+        """
         if self.sim_scenario != "off":
             return self._mark_state_change(self._simulated_snapshot())
 
@@ -571,7 +590,36 @@ class VisionTool:
         if not results:
             return self._mark_state_change(self._fallback_snapshot())
 
-        return self._mark_state_change(self._extract_snapshot(results[0]))
+        snapshot = self._extract_snapshot(results[0])
+
+        # ── OCR card-reader fallback ───────────────────────────────
+        # YOLO detects UI elements well but fails on PPPoker cards.
+        # When buttons are found but no cards, use the OCR card reader.
+        has_buttons = bool(snapshot.action_points)
+        has_cards = bool(snapshot.hero_cards) or bool(snapshot.board_cards)
+
+        if has_buttons and not has_cards and self._card_reader.enabled:
+            pot_xy = snapshot.action_points.get("pot_indicator")
+            hero_cards, board_cards = self._card_reader.read_cards(
+                frame, snapshot.action_points, pot_xy,
+            )
+            if hero_cards or board_cards:
+                snapshot = TableSnapshot(
+                    hero_cards=hero_cards,
+                    board_cards=board_cards,
+                    pot=snapshot.pot,
+                    stack=snapshot.stack,
+                    call_amount=snapshot.call_amount,
+                    dead_cards=list(snapshot.dead_cards),
+                    current_opponent=snapshot.current_opponent,
+                    active_players=snapshot.active_players,
+                    action_points=dict(snapshot.action_points),
+                    showdown_events=list(snapshot.showdown_events),
+                    is_my_turn=snapshot.is_my_turn,
+                    state_changed=snapshot.state_changed,
+                )
+
+        return self._mark_state_change(snapshot)
 
     def read_table(self) -> TableSnapshot:
         """Read the current table state (main entry-point).

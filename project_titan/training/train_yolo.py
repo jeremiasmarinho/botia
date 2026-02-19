@@ -35,7 +35,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="Input image size")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint (.pt)")
-    parser.add_argument("--project", type=str, default="runs/detect", help="Project output directory")
+    parser.add_argument("--project", type=str, default="runs", help="Project output directory")
     parser.add_argument("--name", type=str, default="titan", help="Run name")
     parser.add_argument("--patience", type=int, default=20, help="Early stopping patience")
     parser.add_argument("--lr0", type=float, default=0.01, help="Initial learning rate")
@@ -53,10 +53,20 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _resolve_data_path(data_arg: str) -> Path:
-    """Resolve data.yaml path relative to PROJECT_ROOT if not absolute."""
+    """Resolve data.yaml path relative to PROJECT_ROOT if not absolute.
+
+    Checks CWD first so that running from the repo root with
+    ``--data project_titan/training/data.yaml`` works correctly
+    without doubling the prefix.
+    """
     p = Path(data_arg)
     if p.is_absolute():
         return p
+    # Prefer CWD resolution (covers running from repo root)
+    cwd_candidate = Path.cwd() / p
+    if cwd_candidate.exists():
+        return cwd_candidate.resolve()
+    # Fallback: relative to PROJECT_ROOT (project_titan/)
     return PROJECT_ROOT / p
 
 

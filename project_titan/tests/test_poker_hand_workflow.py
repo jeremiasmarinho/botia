@@ -19,6 +19,7 @@ class Snapshot:
     current_opponent: str = "villain_01"
     pot: float = 100.0
     stack: float = 100.0
+    is_my_turn: bool = True
 
 
 class DummyVision:

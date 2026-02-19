@@ -34,6 +34,11 @@ import threading
 import time
 from typing import Any
 
+try:
+    import yaml as _yaml  # type: ignore[import-untyped]
+except Exception:
+    _yaml = None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Cores ANSI para o terminal
@@ -357,8 +362,30 @@ def main() -> int:
     zmq_bind = args.zmq_bind or os.getenv("TITAN_ZMQ_BIND", "tcp://0.0.0.0:5555")
     emulator_title = args.emulator or os.getenv("TITAN_EMULATOR_TITLE", "LDPlayer")
 
+    # Resolve YOLO model path: --model arg > env var > config_club.yaml
+    model_path = args.model or os.getenv("TITAN_YOLO_MODEL", "")
+    if not model_path:
+        for cfg_name in ("config_club.yaml", "config.yaml"):
+            cfg_path = os.path.join(project_dir, cfg_name)
+            if os.path.isfile(cfg_path) and _yaml is not None:
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        _cfg = _yaml.safe_load(_f)
+                    if isinstance(_cfg, dict):
+                        _vision = _cfg.get("vision", {})
+                        if isinstance(_vision, dict):
+                            _mp = _vision.get("model_path", "")
+                            if _mp:
+                                model_path = os.path.join(project_dir, str(_mp))
+                                break
+                except Exception:
+                    pass
+    if model_path and not os.path.isabs(model_path):
+        model_path = os.path.join(project_dir, model_path)
+
     _log("INFO", f"Python:     {_CYAN}{python}{_RESET}")
     _log("INFO", f"Diretório:  {_CYAN}{project_dir}{_RESET}")
+    _log("INFO", f"Modelo:     {_CYAN}{model_path or '(nenhum)'}{_RESET}")
     _log("INFO", f"Redis:      {_CYAN}{redis_url}{_RESET}")
     _log("INFO", f"ZMQ Bind:   {_CYAN}{zmq_bind}{_RESET}")
     _log("INFO", f"Emulador:   {_CYAN}{emulator_title}{_RESET}")
@@ -405,8 +432,8 @@ def main() -> int:
     env["TITAN_ZMQ_BIND"] = zmq_bind
     if args.emulator:
         env["TITAN_EMULATOR_TITLE"] = emulator_title
-    if args.model:
-        env["TITAN_YOLO_MODEL"] = args.model
+    if model_path:
+        env["TITAN_YOLO_MODEL"] = model_path
     if args.ghost_mouse:
         env["TITAN_GHOST_MOUSE"] = "1"
 

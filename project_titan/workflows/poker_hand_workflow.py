@@ -59,6 +59,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
+import time
 from typing import Any
 
 from tools.action_tool import ActionTool
@@ -68,6 +69,8 @@ from tools.vision_tool import VisionTool
 
 from workflows.protocol import SupportsMemory
 from workflows.thresholds import information_quality, select_action
+from workflows.gto_engine import MixedStrategy, OpponentTendencies, ActionDistribution
+from memory.opponent_db import OpponentDB, HandEvent
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -102,6 +105,9 @@ class Decision:
     street: str = "preflop"
     pot_odds: float = 0.0
     committed: bool = False
+    gto_distribution: dict[str, float] = field(default_factory=dict)
+    opponent_class: str = "Unknown"
+    latency_ms: dict[str, float] = field(default_factory=dict)
 @dataclass(slots=True)
 class PokerHandWorkflow:
     """Orchestrates a single hand decision from read → act → persist.
@@ -124,6 +130,8 @@ class PokerHandWorkflow:
     action: ActionTool
     memory: SupportsMemory
     rng: RngTool
+    gto: MixedStrategy = field(default_factory=MixedStrategy)
+    opponent_db: OpponentDB = field(default_factory=OpponentDB)
 
     # ── Configuration helpers (env-var readers) ─────────────────────
 
@@ -398,8 +406,14 @@ class PokerHandWorkflow:
         Returns:
             :class:`Decision` with action, amount and description.
         """
+        # ── Latency profiling ───────────────────────────────────────
+        _t_cycle_start = time.perf_counter()
+        _latency: dict[str, float] = {}
+
         # ── 1. Snapshot ─────────────────────────────────────────────
+        _t0 = time.perf_counter()
         snapshot = snapshot if snapshot is not None else self.vision.read_table()
+        _latency["vision_ms"] = (time.perf_counter() - _t0) * 1000
 
         # ── 2. Hive mode resolution ────────────────────────────────
         hive_mode = self._resolve_hive_mode(hive_data)
@@ -459,6 +473,7 @@ class PokerHandWorkflow:
         self.memory.set("dead_cards", dead_cards)
 
         # ── 5. Equity computation (PLO6 Monte-Carlo) ────────────────
+        _t0 = time.perf_counter()
         street = self._street_from_board(snapshot.board_cards)
         table_profile = self._table_profile()
         table_position = self._table_position()
@@ -481,25 +496,47 @@ class PokerHandWorkflow:
         info_quality = information_quality(
             snapshot.hero_cards, snapshot.board_cards, dead_cards,
         )
+        _latency["equity_ms"] = (time.perf_counter() - _t0) * 1000
         score = estimate.win_rate + (estimate.tie_rate * 0.5)
         pot_value = self._to_float(snapshot.pot)
         stack_value = self._to_float(snapshot.stack)
         pot_odds = self._pot_odds(pot_value, stack_value)
         current_spr = self._spr(pot_value, stack_value)
 
-        # ── 6. Action selection via threshold engine ────────────────
+        # ── 5b. Resolve current opponent (needed for GTO + RNG) ─────
+        current_opponent = (
+            snapshot_opponent.strip()
+            if isinstance(snapshot_opponent, str) and snapshot_opponent.strip()
+            else self._current_opponent(self.memory)
+        )
+
+        # ── 6. Action selection via GTO mixed-strategy engine ────────
+        _t0 = time.perf_counter()
         is_committed = False
         decision_action = "wait"
         raise_amount = 0.0
         description_parts: list[str] = []
+        gto_dist: dict[str, float] = {}
+        opponent_class = "Unknown"
 
         if len(snapshot.hero_cards) < 2:
             # Sem cartas — aguardar
             decision_action = "wait"
             score = 0.0
             description_parts.append("Aguardando cartas")
+        elif not getattr(snapshot, "is_my_turn", False):
+            # Não é minha vez — aguardar sem executar ação
+            decision_action = "wait"
+            description_parts.append("Não é minha vez")
         else:
-            decision_action, score, pot_odds = select_action(
+            # Look up opponent tendencies from the profiling DB
+            opp_tendencies = None
+            if current_opponent:
+                opp_tendencies = self.opponent_db.to_gto_tendencies(current_opponent)
+                opponent_class = self.opponent_db.get_classification(current_opponent)
+
+            # Use GTO mixed-strategy engine (replaces deterministic select_action)
+            decision_action, score, pot_odds, action_dist = self.gto.select(
                 win_rate=estimate.win_rate,
                 tie_rate=estimate.tie_rate,
                 street=street,
@@ -509,7 +546,15 @@ class PokerHandWorkflow:
                 table_profile=table_profile,
                 table_position=table_position,
                 opponents_count=opponents_count,
+                opponent=opp_tendencies,
             )
+            gto_dist = action_dist.as_dict()
+            description_parts.append(
+                f"GTO [{action_dist.fold:.0%}F/{action_dist.call:.0%}C/"
+                f"{action_dist.raise_small:.0%}Rs/{action_dist.raise_big:.0%}Rb]"
+            )
+            if opponent_class != "Unknown":
+                description_parts.append(f"vs {opponent_class}")
 
             # ── 7. God Mode adjustment (SQUAD_GOD_MODE) ─────────────
             # Quando em squad, reduz thresholds em ~10-15% porque temos
@@ -521,7 +566,7 @@ class PokerHandWorkflow:
 
                 # Re-avalia com score ajustado para potencialmente upgradar
                 # a ação (ex: call → raise_small, raise_small → raise_big)
-                god_action, _, _ = select_action(
+                god_action, _, _, _ = self.gto.select(
                     win_rate=estimate.win_rate + god_bonus,
                     tie_rate=estimate.tie_rate,
                     street=street,
@@ -531,6 +576,7 @@ class PokerHandWorkflow:
                     table_profile=table_profile,
                     table_position=table_position,
                     opponents_count=opponents_count,
+                    opponent=opp_tendencies,
                 )
 
                 # Só permite upgrade de agressividade (nunca downgrade)
@@ -559,7 +605,7 @@ class PokerHandWorkflow:
             if (
                 current_spr < commitment_spr
                 and score >= commitment_equity
-                and decision_action not in {"wait", "fold"}
+                and decision_action != "wait"
             ):
                 decision_action = "all_in"
                 is_committed = True
@@ -568,12 +614,9 @@ class PokerHandWorkflow:
                     f"equity={score:.0%}>{commitment_equity:.0%} → ALL-IN"
                 )
 
+        _latency["gto_decision_ms"] = (time.perf_counter() - _t0) * 1000
+
         # ── 9. RNG evasion ──────────────────────────────────────────
-        current_opponent = (
-            snapshot_opponent.strip()
-            if isinstance(snapshot_opponent, str) and snapshot_opponent.strip()
-            else self._current_opponent(self.memory)
-        )
         rng_alert = None
         if current_opponent:
             rng_alert = self.rng.should_evade(current_opponent)
@@ -609,8 +652,10 @@ class PokerHandWorkflow:
 
         # ── 11. Execute + persist ───────────────────────────────────
         # Map all_in to raise_big for the action tool
+        _t0 = time.perf_counter()
         action_for_tool = "raise_big" if decision_action == "all_in" else decision_action
         result = self.action.act(action_for_tool, street=street)
+        _latency["action_ms"] = (time.perf_counter() - _t0) * 1000
 
         # Build Decision object
         decision = Decision(
@@ -623,6 +668,9 @@ class PokerHandWorkflow:
             street=street,
             pot_odds=round(pot_odds, 4),
             committed=is_committed,
+            gto_distribution=gto_dist,
+            opponent_class=opponent_class,
+            latency_ms={k: round(v, 2) for k, v in _latency.items()},
         )
 
         # ── 12. Persist to memory ──────────────────────────────────
@@ -651,6 +699,11 @@ class PokerHandWorkflow:
                 "decision": decision_action,
                 "amount": raise_amount,
                 "description": full_description,
+                "gto": {
+                    "enabled": self.gto.enabled,
+                    "distribution": gto_dist,
+                    "opponent_class": opponent_class,
+                },
                 "hive": {
                     "mode": hive_mode,
                     "partners": hive_partners if isinstance(hive_partners, list) else [],
@@ -674,5 +727,24 @@ class PokerHandWorkflow:
                 "heads_up_obfuscation": hu_obfuscation,
             },
         )
+
+        # ── 13. Latency profiling ──────────────────────────────────
+        _latency["total_ms"] = (time.perf_counter() - _t_cycle_start) * 1000
+        _LATENCY_WARN_MS = float(os.getenv("TITAN_LATENCY_WARN_MS", "800"))
+        self.memory.set("last_latency", {
+            k: round(v, 2) for k, v in _latency.items()
+        }, ttl=0)
+
+        if _latency["total_ms"] > _LATENCY_WARN_MS:
+            # Log a warning with the breakdown — this is critical for
+            # detecting timeout risk when running 4 LDPlayer instances.
+            breakdown = " | ".join(
+                f"{k}={v:.0f}" for k, v in sorted(_latency.items())
+            )
+            import logging
+            logging.getLogger("titan.workflow").warning(
+                f"LATENCY WARNING: cycle={_latency['total_ms']:.0f}ms "
+                f"exceeds {_LATENCY_WARN_MS:.0f}ms threshold | {breakdown}"
+            )
 
         return decision

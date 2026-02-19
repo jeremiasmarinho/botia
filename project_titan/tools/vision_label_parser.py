@@ -472,7 +472,6 @@ def parse_action_button_label(label: str) -> str | None:
     ]
     raise_pot_patterns = [
         r"^(?:btn_)?raise_pot$",
-        r"^(?:btn_)?pot$",
         r"^raise_pot$",
         r"^preset_pot$",
     ]

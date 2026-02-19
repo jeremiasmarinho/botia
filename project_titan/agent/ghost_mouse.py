@@ -6,12 +6,23 @@ Implementa o Ghost Protocol do Project Titan:
   • Velocidade variável por dificuldade da decisão (tweening).
   • Coordenadas relativas à janela do emulador → absolutas na tela.
   • Backend via PyAutoGUI para controle real do cursor.
+  • **Velocity curve** — ease-in/ease-out (aceleração natural no meio do
+    trajeto, desaceleração perto do alvo, como um humano real).
+  • **Micro-overshoots** — com probabilidade configurável, o cursor
+    ultrapassa o alvo em 5–12px e corrige (movimento humano natural).
+  • **Log-normal click hold** — tempo de pressionamento segue uma
+    distribuição log-normal (cauda longa → cliques longos ocasionais).
+  • **Poisson reaction delay** — tempo de "pensamento" baseado em
+    distribuição de Poisson, modulado pela equity/dificuldade.
+  • **Idle jitter** — micro-movimentos do mouse entre ações para
+    simular mão humana descansando no mouse.
 
 Segurança anti-detecção
 ------------------------
 O movimento do mouse segue uma curva cúbica com 2 pontos de controle
 randômicos, ruído gaussiano por waypoint e hold-time variável no clique.
-A velocidade (ms/px) varia conforme a distância, impedindo padrões lineares.
+A velocidade (ms/px) varia conforme a distância com perfil natural de
+aceleração, impedindo padrões lineares.
 """
 
 from __future__ import annotations
@@ -19,7 +30,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from random import gauss, uniform
+from random import gauss, lognormvariate, random, uniform
 from typing import Any
 
 from utils.logger import TitanLogger
@@ -65,13 +76,35 @@ class GhostMouseConfig:
     timing_medium: tuple[float, float] = (2.0, 4.0)
     timing_hard: tuple[float, float] = (4.0, 12.0)
 
-    # Click parameters
-    click_hold_min: float = 0.04
-    click_hold_max: float = 0.12
-    click_jitter_px: float = 2.0  # max random offset in px applied to final click position
+    # Click parameters — log-normal distribution
+    click_hold_mu: float = -2.7       # log-normal μ  → median ~67ms
+    click_hold_sigma: float = 0.35    # log-normal σ  → occasional long holds
+    click_hold_min: float = 0.03      # absolute floor (30ms)
+    click_hold_max: float = 0.25      # absolute ceiling (250ms)
+    click_jitter_px: float = 2.0      # max random offset in px applied to final click position
 
     # Movement duration (seconds per 100px distance)
     move_duration_per_100px: float = 0.06
+
+    # Velocity curve — ease-in/ease-out parameters
+    velocity_curve_enabled: bool = True
+    velocity_ease_strength: float = 2.2  # exponent for sinusoidal easing (higher = more pronounced)
+
+    # Micro-overshoot — human correction
+    overshoot_probability: float = 0.12   # 12% chance of overshooting the target
+    overshoot_distance_px: tuple[float, float] = (5.0, 14.0)  # overshoot 5-14px past target
+    overshoot_correction_ms: tuple[float, float] = (40.0, 120.0)  # correction movement duration
+
+    # Idle jitter — micro-movements between actions
+    idle_jitter_enabled: bool = True
+    idle_jitter_amplitude_px: float = 4.0  # max drift in px per idle move
+    idle_jitter_interval: tuple[float, float] = (0.8, 3.0)  # seconds between idle jitters
+
+    # Poisson reaction delay
+    poisson_delay_enabled: bool = True
+    poisson_lambda_easy: float = 1.2    # λ for easy decisions (~1.2s mean)
+    poisson_lambda_medium: float = 3.0  # λ for medium decisions (~3.0s mean)
+    poisson_lambda_hard: float = 7.0    # λ for hard decisions (~7.0s mean)
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +199,56 @@ def classify_difficulty(action: str, street: str = "preflop") -> str:
 
     # call anywhere, fold on flop, etc.
     return _DIFFICULTY_EASY
+
+
+def classify_difficulty_by_equity(action: str, street: str = "preflop", equity: float = 0.5) -> str:
+    """Enhanced difficulty classification that considers equity.
+
+    Low-equity decisions are inherently harder (player hesitates more).
+    Very high equity = easy decision (snap-call/raise).
+    Marginal spots (equity ~0.45-0.55) are the hardest.
+    """
+    base = classify_difficulty(action, street)
+
+    # Marginal equity = harder decision (player tank-thinks)
+    if 0.40 <= equity <= 0.55:
+        if base == _DIFFICULTY_EASY:
+            return _DIFFICULTY_MEDIUM
+        return _DIFFICULTY_HARD
+
+    # Very low equity fold = easy (obvious fold)
+    if equity < 0.20 and action.strip().lower() == "fold":
+        return _DIFFICULTY_EASY
+
+    # Nuts = easy (snap-call)
+    if equity > 0.85:
+        return _DIFFICULTY_EASY
+
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Velocity curve — ease-in/ease-out
+# ---------------------------------------------------------------------------
+
+def _ease_in_out(t: float, strength: float = 2.2) -> float:
+    """Sinusoidal ease-in/ease-out curve.
+
+    Maps parameter t ∈ [0, 1] to a new t' that:
+    - Starts slow (ease-in at the beginning)
+    - Accelerates in the middle
+    - Decelerates at the end (ease-out near the target)
+
+    This mimics how humans naturally move a mouse: slow start,
+    fast middle, slow approach to the target.
+
+    Args:
+        t:        Interpolation parameter [0, 1].
+        strength: Exponent controlling how pronounced the easing is.
+                  2.0 = gentle, 3.0 = aggressive.
+    """
+    # Apply smoothstep-like ease using sine
+    return 0.5 * (1.0 - math.cos(math.pi * t ** (1.0 / strength)))
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +402,34 @@ class GhostMouse:
     # -- Helpers internos ----------------------------------------------------
 
     def _thinking_delay(self, difficulty: str) -> float:
-        """Retorna um delay aleatório proporcional à dificuldade da decisão."""
+        """Retorna um delay baseado em distribuição de Poisson modulada pela dificuldade.
+
+        Se Poisson está desativado, usa distribuição uniforme (legacy).
+        O delay Poisson produz uma distribuição mais realista: a maioria
+        dos tempos fica perto da média, com caudas longas ocasionais
+        (jogador que demora muito pensando em um spot difícil).
+        """
+        if self.config.poisson_delay_enabled:
+            # Use Poisson-inspired delay via exponential distribution
+            # (inter-arrival time of a Poisson process)
+            if difficulty == _DIFFICULTY_HARD:
+                lam = self.config.poisson_lambda_hard
+                lo, hi = self.config.timing_hard
+            elif difficulty == _DIFFICULTY_MEDIUM:
+                lam = self.config.poisson_lambda_medium
+                lo, hi = self.config.timing_medium
+            else:
+                lam = self.config.poisson_lambda_easy
+                lo, hi = self.config.timing_easy
+
+            # Exponential variate with clamp to [lo, hi]
+            import random as _rnd
+            raw = _rnd.expovariate(1.0 / lam)
+            # Add small Gaussian jitter for additional naturalism
+            raw += gauss(0, lam * 0.1)
+            return max(lo, min(raw, hi))
+
+        # Legacy: uniform distribution
         if difficulty == _DIFFICULTY_HARD:
             lo, hi = self.config.timing_hard
         elif difficulty == _DIFFICULTY_MEDIUM:
@@ -328,12 +438,25 @@ class GhostMouse:
             lo, hi = self.config.timing_easy
         return uniform(lo, hi)
 
+    def _log_normal_hold_time(self) -> float:
+        """Sample a click hold time from a log-normal distribution.
+
+        Log-normal is more realistic than uniform: most clicks are quick
+        (~60-80ms) but occasionally a longer hold occurs (~150-200ms),
+        mimicking human finger release timing.
+        """
+        raw = lognormvariate(self.config.click_hold_mu, self.config.click_hold_sigma)
+        return max(self.config.click_hold_min, min(raw, self.config.click_hold_max))
+
     def _execute_move_and_click(self, target: ClickPoint) -> None:
         """Executa movimento Bézier real + clique via PyAutoGUI.
 
-        O cursor percorre a curva interpolada com pausa proporcional
-        à distância, depois segura o clique por um tempo aleatório
-        para simular comportamento humano.
+        O cursor percorre a curva interpolada com um perfil de velocidade
+        ease-in/ease-out (aceleração natural no meio, desaceleração no
+        alvo).  Opcionalmente adiciona micro-overshoots e correções.
+
+        O clique usa duração log-normal ao invés de uniforme para
+        mimetizar timing humano de soltar o botão.
         """
         if pyautogui is None:
             raise RuntimeError(
@@ -353,17 +476,93 @@ class GhostMouse:
         # Calculate total movement duration
         distance = math.hypot(target.x - current_x, target.y - current_y)
         total_duration = max(distance / 100.0 * self.config.move_duration_per_100px, 0.05)
-        step_pause = total_duration / max(len(path), 1)
 
-        for pt in path:
+        n = len(path)
+        use_velocity_curve = self.config.velocity_curve_enabled and n > 2
+
+        for i, pt in enumerate(path):
             pyautogui.moveTo(int(pt.x), int(pt.y), _pause=False)
+
+            if use_velocity_curve:
+                # Ease-in/ease-out: steps near the middle are faster,
+                # steps near start and end are slower.
+                t = i / max(n - 1, 1)
+                # Compute the derivative of the easing function to get speed
+                if i < n - 1:
+                    t_next = (i + 1) / max(n - 1, 1)
+                    dt_eased = abs(
+                        _ease_in_out(t_next, self.config.velocity_ease_strength)
+                        - _ease_in_out(t, self.config.velocity_ease_strength)
+                    )
+                    # Larger dt_eased means faster → shorter pause
+                    # Smaller dt_eased means slower → longer pause
+                    base_step = total_duration / max(n, 1)
+                    # Inverse relationship: slow at edges, fast in middle
+                    speed_factor = max(dt_eased * n, 0.3)
+                    step_pause = base_step / speed_factor
+                    step_pause = max(step_pause, 0.001)  # floor
+                else:
+                    step_pause = 0.005  # minimal pause at the final point
+            else:
+                # Legacy: uniform step pauses
+                step_pause = total_duration / max(n, 1)
+
             pyautogui.sleep(step_pause)
 
-        # Hold click for a human-like duration with small positional jitter
+        # ── Micro-overshoot ─────────────────────────────────────────
+        # With some probability, overshoot past the target then correct.
+        # This mimics human hand motor control inaccuracy.
+        if random() < self.config.overshoot_probability:
+            overshoot_dist = uniform(*self.config.overshoot_distance_px)
+            angle = uniform(0, 2 * math.pi)
+            overshoot_x = int(target.x + overshoot_dist * math.cos(angle))
+            overshoot_y = int(target.y + overshoot_dist * math.sin(angle))
+            pyautogui.moveTo(overshoot_x, overshoot_y, _pause=False)
+
+            # Brief pause (human notices overshoot)
+            correction_ms = uniform(*self.config.overshoot_correction_ms)
+            pyautogui.sleep(correction_ms / 1000.0)
+
+            # Correct back to target (short smooth movement)
+            correction_path = _generate_bezier_path(
+                CurvePoint(overshoot_x, overshoot_y),
+                CurvePoint(target.x, target.y),
+                spread=0.15,
+                noise_amp=1.5,
+                density=10,
+            )
+            for cpt in correction_path:
+                pyautogui.moveTo(int(cpt.x), int(cpt.y), _pause=False)
+                pyautogui.sleep(0.003)
+
+        # ── Click with log-normal hold ──────────────────────────────
         jitter = self.config.click_jitter_px
         final_x = int(target.x + gauss(0, jitter))
         final_y = int(target.y + gauss(0, jitter))
         pyautogui.moveTo(final_x, final_y, _pause=False)
-        hold = uniform(self.config.click_hold_min, self.config.click_hold_max)
-        pyautogui.click(_pause=False)
+        hold = self._log_normal_hold_time()
+        pyautogui.mouseDown(_pause=False)
         pyautogui.sleep(hold)
+        pyautogui.mouseUp(_pause=False)
+
+    def idle_jitter(self) -> None:
+        """Perform a tiny random mouse movement to simulate a resting hand.
+
+        Should be called between actions (during waiting periods) to
+        prevent the cursor from being perfectly still for long periods,
+        which is a bot-detection signal.
+        """
+        if not self._enabled or pyautogui is None:
+            return
+        if not self.config.idle_jitter_enabled:
+            return
+
+        amp = self.config.idle_jitter_amplitude_px
+        current_x, current_y = pyautogui.position()
+        dx = gauss(0, amp)
+        dy = gauss(0, amp)
+        new_x = int(current_x + dx)
+        new_y = int(current_y + dy)
+
+        # Very slow, gentle drift (not a snap)
+        pyautogui.moveTo(new_x, new_y, duration=uniform(0.1, 0.3), _pause=False)
