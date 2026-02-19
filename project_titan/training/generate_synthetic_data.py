@@ -47,6 +47,18 @@ CLASS_MAP: dict[str, int] = {
     "Ac": 48, "Ad": 49, "Ah": 50, "As": 51,
 }
 
+# Full class map for data.yaml / classes.txt output (must match training/data.yaml).
+# The generator only produces card labels (0–51), but the output metadata
+# must declare all 62 classes so datasets are directly compatible with the
+# 62-class model.
+FULL_CLASS_MAP: dict[str, int] = {
+    **CLASS_MAP,
+    "btn_fold": 52, "btn_call": 53, "btn_raise": 54,
+    "btn_raise_2x": 55, "btn_raise_2_5x": 56, "btn_raise_pot": 57,
+    "btn_raise_confirm": 58, "btn_allin": 59,
+    "pot": 60, "stack": 61,
+}
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -694,7 +706,7 @@ def main() -> None:
 
     # ── Gerar classes.txt ──
     classes_file = output_dir / "classes.txt"
-    sorted_classes = sorted(CLASS_MAP.items(), key=lambda x: x[1])
+    sorted_classes = sorted(FULL_CLASS_MAP.items(), key=lambda x: x[1])
     with open(classes_file, "w") as f:
         for name, idx in sorted_classes:
             f.write(f"{idx}: {name}\n")
@@ -707,7 +719,7 @@ def main() -> None:
         f.write("train: images/train\n")
         if num_val > 0:
             f.write("val: images/val\n")
-        f.write(f"\nnc: {len(CLASS_MAP)}\n\nnames:\n")
+        f.write(f"\nnc: {len(FULL_CLASS_MAP)}\n\nnames:\n")
         for name, idx in sorted_classes:
             f.write(f"  {idx}: {name}\n")
 

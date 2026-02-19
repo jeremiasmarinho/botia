@@ -4,9 +4,10 @@
 #
 # Classes cobrindo o layout PLO6 completo:
 #   0-51   : 52 cartas individuais (rank + suit)
-#   52-55  : regiões de ação (fold, call, raise_small, raise_big)
-#   56     : pot
-#   57     : stack
+#   52-55  : botões da barra principal (fold, call, raise) + raise modal
+#   56-59  : botões do modal de raise (2x, 2.5x, pot, confirm)
+#   60     : pot
+#   61     : stack
 #
 # Labels de carta seguem formato: <rank><suit>
 #   Ranks: 2,3,4,5,6,7,8,9,T,J,Q,K,A
@@ -22,7 +23,7 @@ train: images/train
 val: images/val
 test: images/test
 
-nc: 58
+nc: 62
 
 names:
   0: 2c
@@ -79,7 +80,11 @@ names:
   51: As
   52: btn_fold
   53: btn_call
-  54: btn_raise_small
-  55: btn_raise_big
-  56: pot
-  57: stack
+  54: btn_raise
+  55: btn_raise_2x
+  56: btn_raise_2_5x
+  57: btn_raise_pot
+  58: btn_raise_confirm
+  59: btn_allin
+  60: pot
+  61: stack

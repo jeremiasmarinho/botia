@@ -427,11 +427,16 @@ def parse_action_button_label(label: str) -> str | None:
     """Map an action-button label to a canonical action name.
 
     Returns:
-        One of ``"fold"``, ``"call"``, ``"raise_small"``, ``"raise_big"``
+        One of ``"fold"``, ``"call"``, ``"raise"``, ``"raise_2x"``,
+        ``"raise_2_5x"``, ``"raise_pot"``, ``"raise_confirm"``
         or ``None`` when the label is not an action button.
+
+    PPPoker PLO6 button mapping:
+        Main bar:  Fold, Call, Raise (opens modal)
+        Modal:     2x, 2.5x, Pot, Raise (confirm)
     """
     normalized = label.strip().lower().replace("-", "_")
-    normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+    normalized = re.sub(r"[^a-z0-9_.]", "", normalized)
 
     fold_patterns = [
         r"^(?:btn_)?fold(?:_button)?$",
@@ -452,11 +457,34 @@ def parse_action_button_label(label: str) -> str | None:
         r"^(?:btn_)?bet(?:_button)?$",
         r"^action_bet$",
     ]
-    raise_big_patterns = [
+    raise_2x_patterns = [
+        r"^(?:btn_)?raise_2x$",
+        r"^(?:btn_)?2x$",
+        r"^raise_2x$",
+        r"^preset_2x$",
+    ]
+    raise_2_5x_patterns = [
+        r"^(?:btn_)?raise_2_?5x$",
+        r"^(?:btn_)?raise_2\.5x$",
+        r"^(?:btn_)?2\.?5x$",
+        r"^raise_2_?5x$",
+        r"^preset_2_?5x$",
+    ]
+    raise_pot_patterns = [
+        r"^(?:btn_)?raise_pot$",
+        r"^(?:btn_)?pot$",
+        r"^raise_pot$",
+        r"^preset_pot$",
+    ]
+    raise_confirm_patterns = [
+        r"^(?:btn_)?raise_confirm$",
+        r"^raise_confirm$",
+        r"^confirm_raise$",
+    ]
+    allin_patterns = [
         r"^(?:btn_)?allin(?:_button)?$",
         r"^(?:button_)?allin$",
         r"^action_allin$",
-        r"^raise_big$",
     ]
 
     for pattern in fold_patterns:
@@ -465,11 +493,23 @@ def parse_action_button_label(label: str) -> str | None:
     for pattern in call_patterns:
         if re.match(pattern, normalized):
             return "call"
-    # raise_big must be checked before raise_small (more specific first)
-    for pattern in raise_big_patterns:
+    # Modal-specific buttons must be checked before generic raise
+    for pattern in raise_2x_patterns:
         if re.match(pattern, normalized):
-            return "raise_big"
+            return "raise_2x"
+    for pattern in raise_2_5x_patterns:
+        if re.match(pattern, normalized):
+            return "raise_2_5x"
+    for pattern in raise_pot_patterns:
+        if re.match(pattern, normalized):
+            return "raise_pot"
+    for pattern in raise_confirm_patterns:
+        if re.match(pattern, normalized):
+            return "raise_confirm"
+    for pattern in allin_patterns:
+        if re.match(pattern, normalized):
+            return "raise_pot"  # all-in maps to pot (max) preset
     for pattern in raise_patterns:
         if re.match(pattern, normalized):
-            return "raise_small"
+            return "raise"
     return None

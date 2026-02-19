@@ -13,7 +13,7 @@ Modos:
 
 Uso:
     python training/calibrate_ghost.py interactive --profile emulator_default
-    python training/calibrate_ghost.py manual --fold 600,700 --call 800,700 --raise-small 1000,700 --raise-big 1000,700 --profile emu1
+    python training/calibrate_ghost.py manual --fold 100,900 --call 260,900 --raise 450,900 --raise-2x 60,900 --raise-2-5x 160,900 --raise-pot 350,900 --raise-confirm 500,900 --profile emu1
     python training/calibrate_ghost.py show --profile emulator_default
     python training/calibrate_ghost.py validate --profile emulator_default
     python training/calibrate_ghost.py env --profile emulator_default
@@ -35,7 +35,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 DEFAULT_PROFILES_DIR = PROJECT_ROOT / "reports" / "calibration_profiles"
-BUTTON_NAMES = ["fold", "call", "raise_small", "raise_big"]
+BUTTON_NAMES = [
+    # Main action bar
+    "fold", "call", "raise",
+    # Raise modal (opened after clicking raise)
+    "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm",
+]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,8 +59,11 @@ def _parse_args() -> argparse.Namespace:
     p_man.add_argument("--profiles-dir", type=str, default=None, dest="profiles_dir")
     p_man.add_argument("--fold", type=str, required=True, help="Fold button x,y")
     p_man.add_argument("--call", type=str, required=True, help="Call button x,y")
-    p_man.add_argument("--raise-small", type=str, required=True, dest="raise_small", help="Raise small x,y")
-    p_man.add_argument("--raise-big", type=str, required=True, dest="raise_big", help="Raise big x,y")
+    p_man.add_argument("--raise", type=str, required=True, dest="raise_btn", help="Raise button x,y (opens modal)")
+    p_man.add_argument("--raise-2x", type=str, required=True, dest="raise_2x", help="Modal 2x preset x,y")
+    p_man.add_argument("--raise-2-5x", type=str, required=True, dest="raise_2_5x", help="Modal 2.5x preset x,y")
+    p_man.add_argument("--raise-pot", type=str, required=True, dest="raise_pot", help="Modal Pot preset x,y")
+    p_man.add_argument("--raise-confirm", type=str, required=True, dest="raise_confirm", help="Modal Raise confirm x,y")
 
     # show
     p_show = sub.add_parser("show", help="Show calibration profile")
@@ -191,8 +199,11 @@ def cmd_manual(args: argparse.Namespace) -> None:
     buttons: dict[str, tuple[int, int]] = {
         "fold": _parse_xy(args.fold),
         "call": _parse_xy(args.call),
-        "raise_small": _parse_xy(args.raise_small),
-        "raise_big": _parse_xy(args.raise_big),
+        "raise": _parse_xy(args.raise_btn),
+        "raise_2x": _parse_xy(args.raise_2x),
+        "raise_2_5x": _parse_xy(args.raise_2_5x),
+        "raise_pot": _parse_xy(args.raise_pot),
+        "raise_confirm": _parse_xy(args.raise_confirm),
     }
 
     profile = _make_profile(buttons, "manual")
@@ -247,8 +258,11 @@ def cmd_env(args: argparse.Namespace) -> None:
     env_map = {
         "fold": "TITAN_BTN_FOLD",
         "call": "TITAN_BTN_CALL",
-        "raise_small": "TITAN_BTN_RAISE_SMALL",
-        "raise_big": "TITAN_BTN_RAISE_BIG",
+        "raise": "TITAN_BTN_RAISE",
+        "raise_2x": "TITAN_BTN_RAISE_2X",
+        "raise_2_5x": "TITAN_BTN_RAISE_2_5X",
+        "raise_pot": "TITAN_BTN_RAISE_POT",
+        "raise_confirm": "TITAN_BTN_RAISE_CONFIRM",
     }
 
     ps = hasattr(args, "powershell") and args.powershell

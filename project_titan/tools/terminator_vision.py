@@ -76,8 +76,12 @@ _CARD_COLORS: dict[str, tuple[int, int, int]] = {
 _ACTION_COLORS: dict[str, tuple[int, int, int]] = {
     "fold":        (0, 0, 220),      # vermelho
     "call":        (0, 220, 0),      # verde
-    "raise_small": (0, 180, 255),    # laranja
-    "raise_big":   (0, 100, 255),    # laranja escuro
+    "raise_small": (0, 180, 255),    # laranja (semantic action)
+    "raise_big":   (0, 100, 255),    # laranja escuro (semantic action)
+    "raise":       (0, 180, 255),    # laranja (UI button)
+    "raise_2x":    (0, 180, 255),    # laranja
+    "raise_pot":   (0, 100, 255),    # laranja escuro
+    "raise_confirm": (0, 140, 255),  # laranja-vermelho
     "wait":        (180, 180, 180),  # cinza
 }
 

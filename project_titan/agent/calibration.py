@@ -1,8 +1,8 @@
 """Action-button calibration cache and coordinate smoothing.
 
 Persists and restores the screen positions of action buttons (fold, call,
-raise_small, raise_big) so the agent does not need YOLO to re-detect them
-every cycle.  Smoothing (EMA with deadzone) reduces jitter from noisy
+raise, raise_2x, raise_2_5x, raise_pot, raise_confirm) so the agent does
+not need YOLO to re-detect them every cycle.  Smoothing (EMA with deadzone) reduces jitter from noisy
 bounding-box centres.
 
 Storage layers (in priority order):
@@ -35,7 +35,8 @@ def normalized_action_points(raw_points: Any) -> dict[str, tuple[int, int]]:
     """Validate and normalise raw action-point coordinates.
 
     Only keeps entries whose action name is one of ``fold``, ``call``,
-    ``raise_small``, ``raise_big`` and whose value is a 2-int tuple/list.
+    ``raise``, ``raise_2x``, ``raise_2_5x``, ``raise_pot``,
+    ``raise_confirm`` and whose value is a 2-int tuple/list.
 
     Args:
         raw_points: Candidate mapping (usually from JSON or Redis).
@@ -51,7 +52,7 @@ def normalized_action_points(raw_points: Any) -> dict[str, tuple[int, int]]:
         if not isinstance(raw_action, str):
             continue
         action = raw_action.strip().lower()
-        if action not in {"fold", "call", "raise_small", "raise_big"}:
+        if action not in {"fold", "call", "raise", "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm"}:
             continue
         if not isinstance(raw_point, (tuple, list)) or len(raw_point) != 2:
             continue

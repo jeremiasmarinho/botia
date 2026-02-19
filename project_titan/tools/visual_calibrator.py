@@ -407,8 +407,7 @@ def _apply_updates(
 
     raise_point = point_updates.get("action.raise")
     if raise_point is not None:
-        action_buttons["raise_small"] = [raise_point.x, raise_point.y]
-        action_buttons["raise_big"] = [raise_point.x, raise_point.y]
+        action_buttons["raise"] = [raise_point.x, raise_point.y]
         action_coordinates["raise"] = {"x": raise_point.x, "y": raise_point.y}
 
     return config_data

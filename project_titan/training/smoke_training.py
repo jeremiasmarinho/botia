@@ -95,8 +95,12 @@ def _validate_data_yaml() -> None:
         raise ValueError("Nomes das 52 cartas não coincidem com o esperado")
 
     # Verify action + region names
-    expected_extra = ["btn_fold", "btn_call", "btn_raise_small", "btn_raise_big", "pot", "stack"]
-    actual_extra = [names[i] for i in range(52, 58)]
+    expected_extra = [
+        "btn_fold", "btn_call", "btn_raise", "btn_raise_2x",
+        "btn_raise_2_5x", "btn_raise_pot", "btn_raise_confirm",
+        "btn_allin", "pot", "stack",
+    ]
+    actual_extra = [names[i] for i in range(52, 62)]
     if actual_extra != expected_extra:
         raise ValueError(f"Classes extras não coincidem: {actual_extra} != {expected_extra}")
 

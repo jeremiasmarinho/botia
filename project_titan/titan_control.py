@@ -561,7 +561,7 @@ def _preview_live_overlay() -> None:
     # --- Action points ---
     action_buttons_cfg = cfg.get_dict("action_buttons")
     action_points: dict[str, tuple[int, int]] = {}
-    for action_name in ("fold", "call", "raise_small", "raise_big"):
+    for action_name in ("fold", "call", "raise", "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm"):
         raw = action_buttons_cfg.get(action_name)
         if isinstance(raw, list) and len(raw) == 2:
             try:
@@ -790,7 +790,7 @@ def _preview_static_overlay(image_path: str) -> None:
     # --- Montar action_points ---
     action_buttons_cfg = cfg.get_dict("action_buttons")
     action_points: dict[str, tuple[int, int]] = {}
-    for action_name in ("fold", "call", "raise_small", "raise_big"):
+    for action_name in ("fold", "call", "raise", "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm"):
         raw = action_buttons_cfg.get(action_name)
         if isinstance(raw, list) and len(raw) == 2:
             try:

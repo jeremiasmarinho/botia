@@ -29,10 +29,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # ── Class IDs (must match training/data.yaml) ────────────────
 CLASS_BTN_FOLD = 52
 CLASS_BTN_CALL = 53
-CLASS_BTN_RAISE_SMALL = 54
-CLASS_BTN_RAISE_BIG = 55
-CLASS_POT = 56
-CLASS_STACK = 57
+CLASS_BTN_RAISE = 54
+CLASS_BTN_RAISE_2X = 55
+CLASS_BTN_RAISE_2_5X = 56
+CLASS_BTN_RAISE_POT = 57
+CLASS_BTN_RAISE_CONFIRM = 58
+CLASS_BTN_ALLIN = 59
+CLASS_POT = 60
+CLASS_STACK = 61
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -153,7 +157,7 @@ def _extract_regions_from_config(
     btn_map = {
         "fold": CLASS_BTN_FOLD,
         "call": CLASS_BTN_CALL,
-        "raise": CLASS_BTN_RAISE_SMALL,
+        "raise": CLASS_BTN_RAISE,
     }
     for key, class_id in btn_map.items():
         coord = action_coords.get(key, {})
@@ -168,8 +172,11 @@ def _extract_regions_from_config(
         btn_map_list = {
             "fold": CLASS_BTN_FOLD,
             "call": CLASS_BTN_CALL,
-            "raise_small": CLASS_BTN_RAISE_SMALL,
-            "raise_big": CLASS_BTN_RAISE_BIG,
+            "raise": CLASS_BTN_RAISE,
+            "raise_2x": CLASS_BTN_RAISE_2X,
+            "raise_2_5x": CLASS_BTN_RAISE_2_5X,
+            "raise_pot": CLASS_BTN_RAISE_POT,
+            "raise_confirm": CLASS_BTN_RAISE_CONFIRM,
         }
         for key, class_id in btn_map_list.items():
             val = action_buttons.get(key)

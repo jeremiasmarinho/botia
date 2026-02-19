@@ -38,7 +38,7 @@ STACK_COLOR = (255, 200, 0)    # cyan
 def get_color(label: str) -> tuple:
     """Retorna cor BGR baseada no tipo de detecção."""
     label_lower = label.lower()
-    if label_lower.startswith("btn_") or label_lower in ("fold", "call", "raise_small", "raise_big"):
+    if label_lower.startswith("btn_") or label_lower in ("fold", "call", "raise", "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm"):
         return BUTTON_COLOR
     if label_lower == "pot":
         return POT_COLOR

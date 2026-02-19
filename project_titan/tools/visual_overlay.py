@@ -72,8 +72,12 @@ CATEGORY_COLORS: dict[str, tuple[int, int, int]] = {
 ACTION_COLORS: dict[str, tuple[int, int, int]] = {
     "fold":        (0, 0, 200),     # red
     "call":        (0, 200, 0),     # green
-    "raise_small": (0, 180, 255),   # orange
-    "raise_big":   (0, 100, 255),   # deep orange
+    "raise_small": (0, 180, 255),   # orange (semantic action)
+    "raise_big":   (0, 100, 255),   # deep orange (semantic action)
+    "raise":       (0, 180, 255),   # orange (UI button)
+    "raise_2x":    (0, 180, 255),   # orange
+    "raise_pot":   (0, 100, 255),   # deep orange
+    "raise_confirm": (0, 140, 255), # orange-red
     "wait":        (180, 180, 180), # gray
 }
 
@@ -327,7 +331,7 @@ def generate_simulated_bboxes(snapshot: Any) -> list[BBox]:
 
     # Action buttons (bottom)
     action_points = getattr(snapshot, "action_points", {}) or {}
-    btn_names = ["fold", "call", "raise_small", "raise_big"]
+    btn_names = ["fold", "call", "raise", "raise_2x", "raise_pot", "raise_confirm"]
     for i, name in enumerate(btn_names):
         if name in action_points:
             pt = action_points[name]

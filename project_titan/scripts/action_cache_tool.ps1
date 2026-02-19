@@ -154,7 +154,7 @@ foreach ($scopeKey in $payload.scopes.Keys) {
     $rawPoints = $scopeValue
   }
 
-  foreach ($actionName in @("fold", "call", "raise_small", "raise_big")) {
+  foreach ($actionName in @("fold", "call", "raise", "raise_2x", "raise_2_5x", "raise_pot", "raise_confirm")) {
     if (-not $rawPoints.ContainsKey($actionName)) {
       continue
     }

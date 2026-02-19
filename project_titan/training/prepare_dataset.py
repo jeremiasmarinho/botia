@@ -38,7 +38,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 SUITS = ["c", "d", "h", "s"]
 CARD_NAMES = [f"{r}{s}" for r in RANKS for s in SUITS]
-ACTION_NAMES = ["btn_fold", "btn_call", "btn_raise_small", "btn_raise_big"]
+ACTION_NAMES = [
+    "btn_fold", "btn_call", "btn_raise", "btn_raise_2x",
+    "btn_raise_2_5x", "btn_raise_pot", "btn_raise_confirm", "btn_allin",
+]
 REGION_NAMES = ["pot", "stack"]
 ALL_CLASS_NAMES = CARD_NAMES + ACTION_NAMES + REGION_NAMES
 

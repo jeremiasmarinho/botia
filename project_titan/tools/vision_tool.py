@@ -279,7 +279,9 @@ class VisionTool:
                 dead_cards=["Ah"], active_players=4,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
-                    "raise_small": (1000, 700), "raise_big": (1000, 700),
+                    "raise": (1000, 700),
+                    "raise_2x": (200, 750), "raise_pot": (500, 750),
+                    "raise_confirm": (1000, 750),
                 },
                 is_my_turn=True,
             ),
@@ -290,7 +292,9 @@ class VisionTool:
                 dead_cards=["Tc", "8h"], active_players=3,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
-                    "raise_small": (1000, 700), "raise_big": (1000, 700),
+                    "raise": (1000, 700),
+                    "raise_2x": (200, 750), "raise_pot": (500, 750),
+                    "raise_confirm": (1000, 750),
                 },
                 is_my_turn=True,
             ),
@@ -301,7 +305,9 @@ class VisionTool:
                 dead_cards=["2c", "2d", "2h"], active_players=2,
                 action_points={
                     "fold": (600, 700), "call": (800, 700),
-                    "raise_small": (1000, 700), "raise_big": (1000, 700),
+                    "raise": (1000, 700),
+                    "raise_2x": (200, 750), "raise_pot": (500, 750),
+                    "raise_confirm": (1000, 750),
                 },
                 is_my_turn=True,
             ),

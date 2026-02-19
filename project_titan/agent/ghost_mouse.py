@@ -155,13 +155,13 @@ def classify_difficulty(action: str, street: str = "preflop") -> str:
     if action_lower == "fold" and street == "preflop":
         return _DIFFICULTY_EASY
 
-    if action_lower in {"raise_big", "raise_small"} and street in {"turn", "river"}:
+    if action_lower in {"raise_big", "raise_small", "raise_pot"} and street in {"turn", "river"}:
         return _DIFFICULTY_HARD
 
     if action_lower == "fold" and street in {"turn", "river"}:
         return _DIFFICULTY_MEDIUM
 
-    if action_lower in {"raise_big", "raise_small"}:
+    if action_lower in {"raise_big", "raise_small", "raise_pot", "raise_2x"}:
         return _DIFFICULTY_MEDIUM
 
     # call anywhere, fold on flop, etc.
@@ -255,6 +255,56 @@ class GhostMouse:
             self._execute_move_and_click(target)
 
         return delay
+
+    def move_and_click_sequence(
+        self,
+        points: list[ClickPoint],
+        difficulty: str = _DIFFICULTY_EASY,
+        relative: bool = True,
+        action_name: str = "",
+        inter_click_delay: tuple[float, float] = (0.3, 0.7),
+    ) -> float:
+        """Execute a multi-step click sequence (e.g. open modal → select preset → confirm).
+
+        Each point is clicked in order with a random humanised pause
+        between clicks.  The *thinking delay* is applied only before the
+        **first** click; subsequent clicks use *inter_click_delay*.
+
+        Args:
+            points:            Ordered list of click coordinates.
+            difficulty:        Difficulty level for the initial thinking delay.
+            relative:          If ``True``, applies emulator window offset.
+            action_name:       Label for logging.
+            inter_click_delay: ``(min, max)`` seconds between clicks.
+
+        Returns:
+            Total delay in seconds (thinking + inter-click pauses).
+        """
+        if not points:
+            return self._thinking_delay(difficulty)
+
+        label = (action_name or "unknown").strip().lower() or "unknown"
+        total_delay = self._thinking_delay(difficulty)
+
+        for idx, pt in enumerate(points):
+            target = self._to_screen(pt) if relative else pt
+            step_label = f"{label}[{idx + 1}/{len(points)}]"
+            self._log.info(
+                f"sequence step={step_label} target=({target.x},{target.y}) "
+                f"relative={1 if relative else 0} enabled={1 if self._enabled else 0}"
+            )
+
+            if self._enabled and pyautogui is not None:
+                self._execute_move_and_click(target)
+
+            # Inter-click pause (skip after last click)
+            if idx < len(points) - 1:
+                pause = uniform(*inter_click_delay)
+                total_delay += pause
+                if self._enabled and pyautogui is not None:
+                    pyautogui.sleep(pause)
+
+        return total_delay
 
     def compute_path(self, start: ClickPoint, end: ClickPoint) -> list[CurvePoint]:
         """Retorna os waypoints Bézier sem executar movimentação (útil para debug/testes)."""

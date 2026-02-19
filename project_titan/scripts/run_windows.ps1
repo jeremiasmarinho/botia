@@ -624,6 +624,8 @@ try {
           if ($null -ne $actionCounts.call) { $callCount = [int]$actionCounts.call }
           if ($null -ne $actionCounts.raise_small) { $raiseCount += [int]$actionCounts.raise_small }
           if ($null -ne $actionCounts.raise_big) { $raiseCount += [int]$actionCounts.raise_big }
+          if ($null -ne $actionCounts.raise_2x) { $raiseCount += [int]$actionCounts.raise_2x }
+          if ($null -ne $actionCounts.raise_pot) { $raiseCount += [int]$actionCounts.raise_pot }
         }
 
         $simUsage = $reportJson.simulation_usage
@@ -695,6 +697,8 @@ try {
           if ($null -ne $actionCounts.call) { $callCount = [int]$actionCounts.call }
           if ($null -ne $actionCounts.raise_small) { $raiseCount += [int]$actionCounts.raise_small }
           if ($null -ne $actionCounts.raise_big) { $raiseCount += [int]$actionCounts.raise_big }
+          if ($null -ne $actionCounts.raise_2x) { $raiseCount += [int]$actionCounts.raise_2x }
+          if ($null -ne $actionCounts.raise_pot) { $raiseCount += [int]$actionCounts.raise_pot }
         }
 
         $simUsage = $reportJson.simulation_usage
