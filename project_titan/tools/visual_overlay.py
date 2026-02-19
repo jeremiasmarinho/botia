@@ -113,6 +113,10 @@ def classify_label_category(label: str) -> str:
         return "dead"
     if lower.startswith(("btn_", "action_", "button_")):
         return "button"
+    # New data.yaml names without btn_ prefix
+    if lower in ("fold", "check", "raise", "raise_2x", "raise_2_5x",
+                  "raise_pot", "raise_confirm", "allin"):
+        return "button"
     if lower.startswith("pot"):
         return "pot"
     if lower.startswith(("stack", "hero_stack")):
@@ -331,7 +335,7 @@ def generate_simulated_bboxes(snapshot: Any) -> list[BBox]:
 
     # Action buttons (bottom)
     action_points = getattr(snapshot, "action_points", {}) or {}
-    btn_names = ["fold", "call", "raise", "raise_2x", "raise_pot", "raise_confirm"]
+    btn_names = ["fold", "check", "raise", "raise_2x", "raise_pot", "raise_confirm"]
     for i, name in enumerate(btn_names):
         if name in action_points:
             pt = action_points[name]
@@ -341,7 +345,7 @@ def generate_simulated_bboxes(snapshot: Any) -> list[BBox]:
             x = 400 + i * 140
             y = 740
         bboxes.append(BBox(x1=x - 40, y1=y - 15, x2=x + 40, y2=y + 15,
-                           label=f"btn_{name}", confidence=0.90, category="button"))
+                           label=name, confidence=0.90, category="button"))
 
     return bboxes
 

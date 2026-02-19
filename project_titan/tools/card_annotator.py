@@ -190,8 +190,10 @@ class CardAnnotator:
             else:
                 # Non-card label (pot, stack, buttons)
                 _NON_CARD_NAMES = {
-                    52: "btn_fold", 53: "btn_call", 54: "btn_raise_s",
-                    55: "btn_raise_b", 56: "pot", 57: "stack",
+                    52: "fold", 53: "check", 54: "raise",
+                    55: "raise_2x", 56: "raise_2_5x", 57: "raise_pot",
+                    58: "raise_confirm", 59: "allin",
+                    60: "pot", 61: "stack",
                 }
                 name = _NON_CARD_NAMES.get(cls_id, f"cls{cls_id}")
                 color = COLOR_EXISTING

@@ -27,14 +27,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # ── Class IDs (must match training/data.yaml) ────────────────
-CLASS_BTN_FOLD = 52
-CLASS_BTN_CALL = 53
-CLASS_BTN_RAISE = 54
-CLASS_BTN_RAISE_2X = 55
-CLASS_BTN_RAISE_2_5X = 56
-CLASS_BTN_RAISE_POT = 57
-CLASS_BTN_RAISE_CONFIRM = 58
-CLASS_BTN_ALLIN = 59
+CLASS_FOLD = 52
+CLASS_CHECK = 53
+CLASS_RAISE = 54
+CLASS_RAISE_2X = 55
+CLASS_RAISE_2_5X = 56
+CLASS_RAISE_POT = 57
+CLASS_RAISE_CONFIRM = 58
+CLASS_ALLIN = 59
 CLASS_POT = 60
 CLASS_STACK = 61
 
@@ -155,9 +155,9 @@ def _extract_regions_from_config(
     # ── Action buttons (center coords → bbox) ──
     action_coords = cfg.get("action_coordinates", {})
     btn_map = {
-        "fold": CLASS_BTN_FOLD,
-        "call": CLASS_BTN_CALL,
-        "raise": CLASS_BTN_RAISE,
+        "fold": CLASS_FOLD,
+        "call": CLASS_CHECK,
+        "raise": CLASS_RAISE,
     }
     for key, class_id in btn_map.items():
         coord = action_coords.get(key, {})
@@ -170,13 +170,13 @@ def _extract_regions_from_config(
     if not action_coords:
         action_buttons = cfg.get("action_buttons", {})
         btn_map_list = {
-            "fold": CLASS_BTN_FOLD,
-            "call": CLASS_BTN_CALL,
-            "raise": CLASS_BTN_RAISE,
-            "raise_2x": CLASS_BTN_RAISE_2X,
-            "raise_2_5x": CLASS_BTN_RAISE_2_5X,
-            "raise_pot": CLASS_BTN_RAISE_POT,
-            "raise_confirm": CLASS_BTN_RAISE_CONFIRM,
+            "fold": CLASS_FOLD,
+            "call": CLASS_CHECK,
+            "raise": CLASS_RAISE,
+            "raise_2x": CLASS_RAISE_2X,
+            "raise_2_5x": CLASS_RAISE_2_5X,
+            "raise_pot": CLASS_RAISE_POT,
+            "raise_confirm": CLASS_RAISE_CONFIRM,
         }
         for key, class_id in btn_map_list.items():
             val = action_buttons.get(key)

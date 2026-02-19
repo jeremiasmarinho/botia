@@ -58,7 +58,7 @@ Se `TITAN_YOLO_MODEL` não for definido, o sistema continua em modo stub (snapsh
 - Pot/stack numérico no label: `pot_23.5`, `stack_120.0`, `hero_stack_88`
 - Oponente atual: `opponent_villain42`, `opp_7`, `villain_rega`
 - Jogadores ativos: `active_players_6`, `player_count_4`, `players_active_3`, `seats_5`
-- Botões de ação: `btn_fold`, `btn_call`, `btn_raise`, `btn_allin`, `action_call`, `action_raise`, `button_fold`
+- Botões de ação: `fold`, `check`, `raise`, `raise_2x`, `raise_2_5x`, `raise_pot`, `raise_confirm`, `allin`
 - Showdown para auditor RNG: `showdown_villain42_eq_37_won`, `sd_rega_0.41_lost`, `allin_v7_62p_win`
 
 No perfil `TITAN_VISION_LABEL_PROFILE=dataset_v1`, o parser também cobre variantes de dataset para dead cards (`burned`, `mucked`, `discarded`, `folded`) e ordens diferentes de token (ex: `burn_card_1_7c`, `card_burn_7c`).
@@ -103,7 +103,7 @@ Quando o label vier genérico (`Ah`, `card_Ah`), o parser separa hero/board pela
 
 `TITAN_ACTIVE_PLAYERS` é fallback manual. O `VisionTool` agora tenta inferir automaticamente `active_players` por frame (label explícito > contagem de oponentes detectados > fallback contextual).
 
-O `VisionTool` também tenta calibrar automaticamente coordenadas dos botões (`fold`, `call`, `raise_small`, `raise_big`) a partir dos labels detectados no frame e aplica no `ActionTool` em runtime.
+O `VisionTool` também tenta calibrar automaticamente coordenadas dos botões (`fold`, `check`, `raise`, `raise_2x`, `raise_pot`, `raise_confirm`, `allin`) a partir dos labels detectados no frame e aplica no `ActionTool` em runtime.
 
 No `PokerAgent`, essa calibração agora fica em cache por `table_id`: quando um frame não traz labels de botão, o agente reutiliza a última calibração válida da mesa. Para desligar, use `TITAN_ACTION_CALIBRATION_CACHE=0`.
 
@@ -222,7 +222,7 @@ Esse comando inicializa o orquestrador, valida o bootstrap e encerra com código
 
 `workflows/poker_hand_workflow.py` agora usa política por street com sizing:
 
-- `fold`, `call`, `raise_small`, `raise_big`
+- `fold`, `call`, `raise_small`, `raise_big` (decisões semânticas do workflow, mapeadas pelo ActionTool para os presets reais: `raise_small` → `raise_2x`, `raise_big` → `raise_pot`)
 
 A decisão considera `win_rate`, `tie_rate`, `pot_odds` e qualidade da informação observada na mesa.
 
@@ -598,13 +598,13 @@ Quando ativo (via `--visual` no E2E runner), exibe painel com:
 
 ## Infraestrutura de treino YOLO
 
-### Dataset (58 classes)
+### Dataset (62 classes)
 
-Configurado em `training/data.yaml`:
+Configurado em `training/data.yaml` (treino híbrido: synthetic + titan_cards):
 
 - 52 cartas: `2c`, `2d`, `2h`, `2s`, ..., `Ac`, `Ad`, `Ah`, `As`
-- 4 botões de ação: `btn_fold`, `btn_call`, `btn_raise_small`, `btn_raise_big`
-- 2 regiões numéricas: `pot`, `stack`
+- 8 botões de ação: `fold`(52), `check`(53), `raise`(54), `raise_2x`(55), `raise_2_5x`(56), `raise_pot`(57), `raise_confirm`(58), `allin`(59)
+- 2 regiões numéricas: `pot`(60), `stack`(61)
 
 ### Pipeline de treino
 
@@ -690,10 +690,13 @@ Build recomendado via WSL/Linux com Buildozer.
 ### Variaveis de ambiente do Ghost Mouse
 
 - `TITAN_GHOST_MOUSE`: `0` (padrao, simulado) ou `1` (ativa PyAutoGUI real)
-- `TITAN_BTN_FOLD`: coordenadas do botao fold, ex: `600,700`
-- `TITAN_BTN_CALL`: coordenadas do botao call, ex: `800,700`
-- `TITAN_BTN_RAISE_SMALL`: coordenadas do botao raise small, ex: `1000,700`
-- `TITAN_BTN_RAISE_BIG`: coordenadas do botao raise big, ex: `1000,700`
+- `TITAN_BTN_FOLD`: coordenadas do botão fold, ex: `600,700`
+- `TITAN_BTN_CALL`: coordenadas do botão check/call, ex: `800,700`
+- `TITAN_BTN_RAISE`: coordenadas do botão raise (abre modal), ex: `1000,700`
+- `TITAN_BTN_RAISE_2X`: coordenadas do preset raise 2×, ex: `1000,500`
+- `TITAN_BTN_RAISE_POT`: coordenadas do preset raise pot, ex: `1100,500`
+- `TITAN_BTN_RAISE_CONFIRM`: coordenadas do botão confirmar raise, ex: `1050,600`
+- `TITAN_BTN_ALLIN`: coordenadas do botão all-in, ex: `1200,700`
 
 `tools/action_tool.py` agora delega para o `GhostMouse` automaticamente, usando `classify_difficulty(action, street)` para determinar o timing adequado.
 
@@ -703,8 +706,8 @@ Quando dois agentes do sistema ficam sozinhos na mesma mesa (heads-up), o `HiveB
 
 O workflow detecta essa flag e:
 
-- Converte `call` em `raise_small`
-- Converte `raise_small` em `raise_big` (quando score >= 0.55)
+- Converte `call` em `raise_small` (mapeado para `raise_2x`)
+- Converte `raise_small` em `raise_big` (mapeado para `raise_pot`, quando score >= 0.55)
 
 Isso garante que observadores vejam combate real entre os agentes, nunca check-down.
 

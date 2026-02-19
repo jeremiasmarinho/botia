@@ -53,9 +53,9 @@ CLASS_MAP: dict[str, int] = {
 # 62-class model.
 FULL_CLASS_MAP: dict[str, int] = {
     **CLASS_MAP,
-    "btn_fold": 52, "btn_call": 53, "btn_raise": 54,
-    "btn_raise_2x": 55, "btn_raise_2_5x": 56, "btn_raise_pot": 57,
-    "btn_raise_confirm": 58, "btn_allin": 59,
+    "fold": 52, "check": 53, "raise": 54,
+    "raise_2x": 55, "raise_2_5x": 56, "raise_pot": 57,
+    "raise_confirm": 58, "allin": 59,
     "pot": 60, "stack": 61,
 }
 

@@ -96,9 +96,9 @@ def _validate_data_yaml() -> None:
 
     # Verify action + region names
     expected_extra = [
-        "btn_fold", "btn_call", "btn_raise", "btn_raise_2x",
-        "btn_raise_2_5x", "btn_raise_pot", "btn_raise_confirm",
-        "btn_allin", "pot", "stack",
+        "fold", "check", "raise", "raise_2x",
+        "raise_2_5x", "raise_pot", "raise_confirm",
+        "allin", "pot", "stack",
     ]
     actual_extra = [names[i] for i in range(52, 62)]
     if actual_extra != expected_extra:

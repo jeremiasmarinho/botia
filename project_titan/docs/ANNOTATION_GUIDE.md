@@ -24,7 +24,7 @@ python -m tools.label_assist --export-classes classes.txt
 O script cria:
 
 - `data/to_annotate/` com as imagens + labels `.txt` vazios
-- `data/to_annotate/classes.txt` com as 58 classes na ordem correta
+- `data/to_annotate/classes.txt` com as 62 classes na ordem correta
 - `data/to_annotate/manifest.csv` para controlo de progresso
 
 ## 2. Auto-Labeler v0 (acelerador inicial)
@@ -45,11 +45,11 @@ python -m tools.auto_labeler --dry-run
 
 O auto-labeler gera bounding boxes para:
 
-- **pot** (classe 56) — da região `ocr.pot_region` ou `ocr.pot_box`
-- **stack** (classe 57) — da região `ocr.stack_region`
-- **btn_fold** (classe 52) — do centro `action_coordinates.fold`
-- **btn_call** (classe 53) — do centro `action_coordinates.call`
-- **btn_raise_small** (classe 54) — do centro `action_coordinates.raise`
+- **pot** (classe 60) — da região `ocr.pot_region` ou `ocr.pot_box`
+- **stack** (classe 61) — da região `ocr.stack_region`
+- **fold** (classe 52) — do centro `action_coordinates.fold`
+- **check** (classe 53) — do centro `action_coordinates.call`
+- **raise** (classe 54) — do centro `action_coordinates.raise`
 
 > As cartas (classes 0-51) **não são geradas** automaticamente —
 > precisam de anotação manual porque dependem de reconhecimento visual.
@@ -86,7 +86,7 @@ labelimg data/to_annotate/ data/to_annotate/classes.txt
 Indicado para equipas com muitas imagens. Setup Docker disponível em
 [github.com/cvat-ai/cvat](https://github.com/cvat-ai/cvat).
 
-## 4. Lista completa das 58 classes
+## 4. Lista completa das 62 classes
 
 A ordem **deve** coincidir exactamente com `training/data.yaml`.
 
@@ -144,12 +144,16 @@ A ordem **deve** coincidir exactamente com `training/data.yaml`.
 | 49 | `Ad` | A de Ouros |
 | 50 | `Ah` | A de Copas |
 | 51 | `As` | A de Espadas |
-| 52 | `btn_fold` | Botão Fold |
-| 53 | `btn_call` | Botão Call |
-| 54 | `btn_raise_small` | Botão Raise (pequeno) |
-| 55 | `btn_raise_big` | Botão Raise (grande) |
-| 56 | `pot` | Valor do pote |
-| 57 | `stack` | Stack do jogador |
+| 52 | `fold` | Botão Fold |
+| 53 | `check` | Botão Check / Call |
+| 54 | `raise` | Botão Raise (abrir modal) |
+| 55 | `raise_2x` | Preset Raise 2× |
+| 56 | `raise_2_5x` | Preset Raise 2.5× |
+| 57 | `raise_pot` | Preset Raise Pot |
+| 58 | `raise_confirm` | Confirmar Raise |
+| 59 | `allin` | Botão All-In |
+| 60 | `pot` | Valor do pote |
+| 61 | `stack` | Stack do jogador |
 
 ## 5. Dicas de anotação para PLO6
 
@@ -160,14 +164,18 @@ A ordem **deve** coincidir exactamente com `training/data.yaml`.
 - A bbox deve conter o rank + suit do canto (ex: `A♥`)
 - Se a carta está completamente tapada, **não anotar**
 
-### Botões (classes 52-55)
+### Botões (classes 52-59)
 
 - Anotar o botão inteiro (texto + fundo colorido)
-- `btn_raise_small` = botão de raise normal
-- `btn_raise_big` = botão de all-in ou raise máximo
-- Se ambos apontam para o mesmo botão, anotar como `btn_raise_small`
+- `raise` (54) = botão que abre o modal de raise
+- `raise_2x` (55) = preset 2× dentro do modal
+- `raise_2_5x` (56) = preset 2.5× dentro do modal
+- `raise_pot` (57) = preset Pot dentro do modal
+- `raise_confirm` (58) = botão de confirmação dentro do modal
+- `allin` (59) = botão All-In
+- `check` (53) representa tanto Check como Call (mesmo botão no PPPoker)
 
-### Pot e Stack (classes 56-57)
+### Pot e Stack (classes 60-61)
 
 - Anotar a região do texto numérico
 - Incluir apenas os dígitos e separadores, não o fundo decorativo
@@ -184,7 +192,7 @@ data/to_annotate/             ← imagens + labels vazios + classes.txt
 data/to_annotate/             ← labels parciais (pot, stack, botões)
     │
     ▼  Roboflow / LabelImg    ← anotação manual das cartas
-data/to_annotate/             ← labels completos (58 classes)
+data/to_annotate/             ← labels completos (62 classes)
     │
     ▼  python training/prepare_dataset.py --source data/to_annotate
 datasets/titan_cards/         ← train/val/test splits

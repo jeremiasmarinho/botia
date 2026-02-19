@@ -136,7 +136,7 @@ def check_overlay() -> tuple[bool, str]:
     tests = [
         ("hero_Ah", "hero"),
         ("board_Kd", "board"),
-        ("btn_fold", "button"),
+        ("fold", "button"),
         ("pot_120", "pot"),
         ("dead_7c", "dead"),
         ("opponent_v1", "opponent"),
