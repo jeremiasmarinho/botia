@@ -23,9 +23,11 @@
 
 path: F:/botia/project_titan/datasets
 train:
-  - synthetic/images/train # Cartas (0-51)
+  - synthetic_v3/images/train # PPPoker-realistic (gold borders, showdown, buttons)
+  - synthetic/images/train # Cartas simples (0-51)
   - titan_cards/images/train # UI Real (Botões, Pot, Stack)
 val:
+  - synthetic_v3/images/val
   - synthetic/images/val
   - titan_cards/images/val
 
