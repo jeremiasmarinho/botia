@@ -1,6 +1,0 @@
-﻿[Agent] * Agente 02 conectado a tcp://127.0.0.1:5555 table=table_smoke_squad  memory=memory
-[Agent] > mode=solo partners=[] dead_cards=[] active_players=0 hu_obf=False latency_ms=0.02 my_turn=False state_changed=False action_points=['fold', 'call', 'raise_small', 'raise_big'] action_calibration=cache outcome=win_rate=0.00 action=wait delay=0.99s difficulty=easy
-[Agent] * mode=squad partners=['01'] dead_cards=['7c', '2d', '4h', '3s'] active_players=4 hu_obf=False latency_ms=0.01 my_turn=True state_changed=True action_points=['fold', 'call', 'raise_small', 'raise_big'] action_calibration=vision outcome=win_rate=0.09 action=fold delay=1.47s difficulty=easy
-[Agent] * mode=squad partners=['01'] dead_cards=['As', 'Kd', 'Qh', 'Js'] active_players=3 hu_obf=False latency_ms=0.02 my_turn=True state_changed=True action_points=['fold', 'call', 'raise_small', 'raise_big'] action_calibration=vision outcome=win_rate=0.36 action=fold delay=1.43s difficulty=easy
-[Agent] + max_cycles=3 atingido. parando.
-
