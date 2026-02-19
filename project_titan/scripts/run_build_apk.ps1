@@ -19,7 +19,7 @@ if (-not (Test-DistroInstalled -Name $Distro)) {
 
 $bashCmd = @'
 set -euo pipefail
-cd /mnt/c/botia/project_titan/mobile
+cd /mnt/f/botia/project_titan/mobile
 python3 -m pip install --upgrade pip
 python3 -m pip install buildozer cython
 buildozer android debug
@@ -27,7 +27,7 @@ buildozer android debug
 
 wsl -d $Distro -- bash -lc $bashCmd
 
-$apkDir = "c:\botia\project_titan\mobile\bin"
+$apkDir = "F:\botia\project_titan\mobile\bin"
 if (-not (Test-Path $apkDir)) {
     throw "Build finalizado sem pasta de saída esperada: $apkDir"
 }

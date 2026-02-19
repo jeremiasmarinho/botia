@@ -7,7 +7,7 @@ detecções com bounding boxes coloridas numa janela OpenCV.
 
 Uso:
     python scripts/live_demo.py
-    python scripts/live_demo.py --model "C:/botia/runs/detect/runs/detect/titan_v5_synth_nano/weights/best.pt"
+    python scripts/live_demo.py --model "F:/botia/runs/detect/runs/detect/titan_v5_synth_nano/weights/best.pt"
 
 Controles:
     Q / ESC  → Sair

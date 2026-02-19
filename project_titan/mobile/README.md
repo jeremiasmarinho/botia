@@ -14,20 +14,20 @@ Não foi possível gerar o APK diretamente neste ambiente porque não há toolch
 1. Abra PowerShell **como Administrador** e rode:
 
 ```powershell
-cd c:\botia\project_titan
+cd F:\botia\project_titan
 ./scripts/setup_apk_toolchain.ps1
 ```
 
 2. Depois rode o build:
 
 ```powershell
-cd c:\botia\project_titan
+cd F:\botia\project_titan
 ./scripts/run_build_apk.ps1
 ```
 
 3. APK esperado:
 
-- `c:\botia\project_titan\mobile\bin\*.apk`
+- `F:\botia\project_titan\mobile\bin\*.apk`
 
 1. Instalar dependências de sistema:
 

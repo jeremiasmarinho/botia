@@ -1,28 +1,32 @@
-__pycache__/
-*.py[cod]
-*$py.class
+# ──────────────────────────────────────────────
+# Project-titan specific ignores
+# (General Python, OS, IDE rules are in root .gitignore)
+# ──────────────────────────────────────────────
 
-.venv/
-venv/
-env/
-
-.pytest_cache/
-.mypy_cache/
-
+# Mobile build artifacts
 mobile/.buildozer/
 mobile/bin/
 mobile/.gradle/
 mobile/.python-for-android/
 
+# Reports (generated at runtime)
 reports/*.json
+reports/*.log
+reports/*.png
 reports/calibration_profiles/
 reports/logs/
 reports/logs_endurance/
 reports/logs_mock_cycle/
 reports/logs_mock_e2e/
+
+# Data directories
 data/raw/
 data/to_annotate/
+
+# Datasets (large / generated)
 datasets/
+
+# Model weights
 models/*.pt
-runs/
 yolov8n.pt
+yolov8s.pt

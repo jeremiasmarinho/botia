@@ -27,7 +27,7 @@ from tools.vision_tool import VisionTool
 from tools.equity_tool import EquityTool
 from tools.action_tool import ActionTool
 from tools.rng_tool import RngTool
-from agents.zombie_agent import ZombieAgent
+from agent.zombie_agent import ZombieAgent
 from utils.config import ServerConfig, VisionRuntimeConfig
 from utils.logger import TitanLogger
 

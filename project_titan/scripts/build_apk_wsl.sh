@@ -2,12 +2,12 @@
 set -euo pipefail
 
 DISTRO="${1:-Ubuntu-24.04}"
-PROJECT_WIN_PATH="C:\\botia\\project_titan"
+PROJECT_WIN_PATH="F:\\botia\\project_titan"
 
 echo "[1/4] Entering WSL distro: ${DISTRO}"
 
 # Convert Windows path to WSL path
-PROJECT_WSL_PATH="/mnt/c/botia/project_titan"
+PROJECT_WSL_PATH="/mnt/f/botia/project_titan"
 MOBILE_PATH="${PROJECT_WSL_PATH}/mobile"
 
 if [ ! -d "${MOBILE_PATH}" ]; then

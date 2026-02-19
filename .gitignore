@@ -1,13 +1,105 @@
+# ──────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
 
+# ──────────────────────────────────────────────
+# Virtual environments
+# ──────────────────────────────────────────────
 .venv/
 venv/
 env/
+.env/
 
+# ──────────────────────────────────────────────
+# Testing / Linting / Type-checking
+# ──────────────────────────────────────────────
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
+# ──────────────────────────────────────────────
+# Model weights (use Git LFS or cloud storage)
+# ──────────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.mlmodel
+
+# ──────────────────────────────────────────────
+# YOLO training runs & caches
+# ──────────────────────────────────────────────
+runs/
+*.cache
+
+# ──────────────────────────────────────────────
+# Datasets (large / generated)
+# ──────────────────────────────────────────────
+project_titan/datasets/
+project_titan/data/raw/
+project_titan/data/to_annotate/
+
+# ──────────────────────────────────────────────
+# Reports / logs (generated at runtime)
+# ──────────────────────────────────────────────
+project_titan/reports/*.json
+project_titan/reports/*.log
+project_titan/reports/*.png
+project_titan/reports/calibration_profiles/
+project_titan/reports/logs/
+project_titan/reports/logs_endurance/
+project_titan/reports/logs_mock_cycle/
+project_titan/reports/logs_mock_e2e/
+reports/
+
+# ──────────────────────────────────────────────
+# Mobile build artifacts
+# ──────────────────────────────────────────────
 project_titan/mobile/.buildozer/
 project_titan/mobile/bin/
+project_titan/mobile/.gradle/
+project_titan/mobile/.python-for-android/
+
+# ──────────────────────────────────────────────
+# IDE / Editor
+# ──────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ──────────────────────────────────────────────
+# OS junk
+# ──────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+._*
+
+# ──────────────────────────────────────────────
+# Jupyter
+# ──────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ──────────────────────────────────────────────
+# Misc
+# ──────────────────────────────────────────────
+*.log
+tmp/
+temp/
+*.bak

@@ -43,7 +43,7 @@ cd project_titan
 ## Troubleshooting rápido
 
 - **`Python não encontrado` no `run_windows.ps1`**
-  - Ative o ambiente virtual em `C:\botia\.venv` ou garanta `python` no `PATH`.
+  - Ative o ambiente virtual em `F:\botia\.venv` ou garanta `python` no `PATH`.
 
 - **`smoke_sweep.ps1` não gera `sweep_summary_*.json`**
   - Confirme que o comando está rodando em `project_titan` e com `-ReportDir` válido.
