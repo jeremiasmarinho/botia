@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <title>Titan Edge AI — Omaha PLO5/PLO6</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header class="header">
+        <h1>TITAN <span class="accent">EDGE AI</span></h1>
+        <div class="status-bar">
+          <span id="adb-status" class="badge badge--offline">ADB: Offline</span>
+          <span id="equity-status" class="badge badge--offline"
+            >Equity: --</span
+          >
+          <span id="vision-status" class="badge badge--offline"
+            >Vision: --</span
+          >
+        </div>
+      </header>
+
+      <!-- Main Dashboard -->
+      <main class="dashboard">
+        <!-- Left Panel: Vision Feed -->
+        <section class="panel vision-panel">
+          <h2>Visão (WebGPU)</h2>
+          <div id="vision-feed" class="vision-feed">
+            <canvas id="yolo-canvas" width="640" height="640"></canvas>
+            <div id="detection-overlay"></div>
+          </div>
+          <div class="vision-stats">
+            <span>Inferência: <strong id="inference-ms">--</strong> ms</span>
+            <span>Detecções: <strong id="detection-count">0</strong></span>
+          </div>
+        </section>
+
+        <!-- Center Panel: Game State -->
+        <section class="panel game-panel">
+          <h2>Estado do Jogo</h2>
+
+          <div class="hero-cards" id="hero-cards">
+            <!-- Cards populated dynamically -->
+            <div class="card-slot">?</div>
+            <div class="card-slot">?</div>
+            <div class="card-slot">?</div>
+            <div class="card-slot">?</div>
+            <div class="card-slot">?</div>
+          </div>
+
+          <div class="board-cards" id="board-cards">
+            <div class="card-slot board">?</div>
+            <div class="card-slot board">?</div>
+            <div class="card-slot board">?</div>
+            <div class="card-slot board">?</div>
+            <div class="card-slot board">?</div>
+          </div>
+
+          <div class="equity-display">
+            <div class="equity-bar">
+              <div id="equity-fill" class="equity-fill" style="width: 0%"></div>
+            </div>
+            <span id="equity-value" class="equity-value">0%</span>
+          </div>
+
+          <div class="decision-box" id="decision-box">
+            <span class="decision-label">Decisão:</span>
+            <span id="decision-action" class="decision-action">--</span>
+            <span id="decision-reasoning" class="decision-reasoning"></span>
+          </div>
+        </section>
+
+        <!-- Right Panel: Opponent Profiling -->
+        <section class="panel profile-panel">
+          <h2>Oponentes</h2>
+          <div id="opponent-list" class="opponent-list">
+            <div class="opponent-placeholder">Nenhum oponente rastreado</div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Footer: Health -->
+      <footer class="footer">
+        <span>Uptime: <strong id="uptime">0s</strong></span>
+        <span>Memória: <strong id="memory">--</strong></span>
+        <span>Workers: <strong id="workers">0</strong></span>
+      </footer>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

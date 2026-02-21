@@ -1,0 +1,26 @@
+{
+  "name": "titan-core-engine",
+  "version": "0.1.0",
+  "private": true,
+  "main": "titan_core.node",
+  "napi": {
+    "name": "titan-core",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "napi build --release",
+    "build:debug": "napi build",
+    "test": "cargo test"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  }
+}

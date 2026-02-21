@@ -1,0 +1,366 @@
+// ═══════════════════════════════════════════════════════════════════════
+// Titan Distributed Cloud — gRPC Contract v1
+//
+// This Protocol Buffer definition is the SINGLE SOURCE OF TRUTH for all
+// communication between the Edge Client (Electron) and the Cloud Solver.
+//
+// Design Principles:
+//   1. ZERO ALLOCATION on the hot path — fixed-size fields, no strings
+//      for cards (use uint32 enums), packed repeated fields.
+//   2. OMAHA-NATIVE — hand_cards supports 4-6 cards natively.
+//   3. FULL GAME TREE — action history preserves the complete betting
+//      sequence for CFR strategy lookup.
+//   4. BIDIRECTIONAL STREAMING — supports streaming table states for
+//      multi-table sessions over a single gRPC channel.
+//
+// Wire Size Estimates:
+//   TableState (PLO6, river, 4 actions): ~180 bytes
+//   SolverResponse: ~60 bytes
+//   Round-trip at 1Gbps: < 0.01ms (network latency dominates)
+//
+// ═══════════════════════════════════════════════════════════════════════
+
+syntax = "proto3";
+
+package titan.v1;
+
+option java_package = "com.titan.proto.v1";
+option go_package = "github.com/jeremiasmarinho/titan/proto/v1";
+
+// ─────────────────────────────────────────────────────────────────────
+// Service Definition
+// ─────────────────────────────────────────────────────────────────────
+
+// TitanSolver — the cloud-side decision engine.
+// Accepts a table state and returns the GTO+exploitative action.
+service TitanSolver {
+  // Unary RPC: single table state → single decision.
+  // Use for standard single-table play.
+  rpc Solve (TableState) returns (SolverResponse);
+
+  // Server-streaming: subscribe to solver updates for a session.
+  // Returns intermediate equity estimates + final decision.
+  rpc SolveStream (TableState) returns (stream SolverUpdate);
+
+  // Bidirectional streaming: multi-table session.
+  // Client streams table states, server streams decisions.
+  rpc SolveMultiTable (stream TableState) returns (stream SolverResponse);
+
+  // Opponent profiling queries.
+  rpc GetOpponentProfile (OpponentQuery) returns (OpponentProfile);
+  rpc RecordHandResult (HandResult) returns (Ack);
+
+  // Health check for latency monitoring.
+  rpc Ping (PingRequest) returns (PingResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Core Enums
+// ─────────────────────────────────────────────────────────────────────
+
+// Card encoding: 6-bit packed (rank 0-12 << 2 | suit 0-3)
+// Total range: 0-51. Matches YOLO class IDs for cards.
+//
+// Rank: 2=0, 3=1, 4=2, 5=3, 6=4, 7=5, 8=6, 9=7, T=8, J=9, Q=10, K=11, A=12
+// Suit: c=0, d=1, h=2, s=3
+//
+// Examples: Ah = (12<<2)|2 = 50, 2c = (0<<2)|0 = 0, Ks = (11<<2)|3 = 47
+// Cards are uint32 for protobuf efficiency (varint encoding).
+
+enum Street {
+  STREET_UNKNOWN  = 0;
+  PREFLOP         = 1;
+  FLOP            = 2;
+  TURN            = 3;
+  RIVER           = 4;
+}
+
+enum GameFormat {
+  FORMAT_UNKNOWN  = 0;
+  PLO5            = 1;  // Pot-Limit Omaha 5 cards
+  PLO6            = 2;  // Pot-Limit Omaha 6 cards
+  PLO4            = 3;  // Standard PLO (4 cards) — legacy support
+}
+
+// GameVariant — the strategic routing key.
+// The Rust engine uses this to select COMPLETELY DIFFERENT evaluators.
+// PLO5 and PLO6 have different:
+//   - Equity calculation (C(5,2)=10 vs C(6,2)=15 hand combos)
+//   - GTO ranges (PLO6 VPIP 60-70% is NORMAL)
+//   - Value-bet thresholds (River value needs much stronger hands in PLO6)
+//   - Opponent classification curves (PLO5 Nit < 30% vs PLO6 Nit < 40%)
+enum GameVariant {
+  GAME_VARIANT_PLO5 = 0;  // Default: Pot-Limit Omaha 5 cards
+  GAME_VARIANT_PLO6 = 1;  // Pot-Limit Omaha 6 cards
+}
+
+enum Position {
+  POS_UNKNOWN     = 0;
+  UTG             = 1;  // Under the Gun
+  UTG1            = 2;
+  MP              = 3;  // Middle Position
+  MP1             = 4;
+  HJ              = 5;  // Hijack
+  CO              = 6;  // Cutoff
+  BTN             = 7;  // Button (Dealer)
+  SB              = 8;  // Small Blind
+  BB              = 9;  // Big Blind
+}
+
+enum ActionType {
+  ACTION_UNKNOWN  = 0;
+  FOLD            = 1;
+  CHECK           = 2;
+  CALL            = 3;
+  BET             = 4;
+  RAISE           = 5;
+  ALL_IN          = 6;
+  POST_BLIND      = 7;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Request Messages
+// ─────────────────────────────────────────────────────────────────────
+
+// TableState — the complete game state snapshot sent by the Edge Client.
+// This is the primary input to the solver.
+message TableState {
+  // ── Session Identity ────────────────────────────────────────────
+  string session_id       = 1;   // Unique session (e.g. table + timestamp)
+  string table_id         = 2;   // PPPoker table identifier
+  uint64 hand_number      = 3;   // Sequential hand counter
+
+  // ── Game Parameters ─────────────────────────────────────────────
+  GameFormat  format       = 4;   // PLO5 or PLO6 (wire format)
+  Street      street       = 5;   // Current street
+  GameVariant game_variant = 20;  // Strategic routing key (field 20 to avoid renumbering)
+  uint32     num_players  = 6;   // Players dealt in (2-9)
+  uint32     hero_seat    = 7;   // Hero's seat index (0-based)
+  Position   hero_position = 8;  // Hero's table position
+
+  // ── Cards (encoded as uint32, range 0-51) ───────────────────────
+  // Packed for wire efficiency. Client ensures no duplicates.
+  repeated uint32 hero_cards  = 9  [packed = true];  // 5 or 6 cards
+  repeated uint32 board_cards = 10 [packed = true];  // 0-5 cards
+  repeated uint32 dead_cards  = 11 [packed = true];  // Known mucked/colluded
+
+  // ── Pot & Stacks (in big blinds, fixed-point ×100 for precision) ─
+  // Example: 15.50 BB → 1550
+  uint64 pot_size_bb100      = 12; // Current main pot
+  uint64 hero_stack_bb100    = 13; // Hero's remaining stack
+  repeated uint64 villain_stacks_bb100 = 14 [packed = true]; // Per-seat
+
+  // ── Betting Action History ──────────────────────────────────────
+  // Full action sequence preserves the game tree path for CFR lookup.
+  repeated ActionEntry actions = 15;
+
+  // ── Opponent IDs (for profiling lookup) ─────────────────────────
+  repeated string opponent_ids = 16;
+
+  // ── Timing Metadata ─────────────────────────────────────────────
+  uint64 client_timestamp_ms = 17; // Client clock (for latency calc)
+  uint32 time_bank_ms        = 18; // Remaining time bank
+
+  // ── Optional: Vision Confidence ─────────────────────────────────
+  // Allows the solver to weight its decision by detection reliability.
+  float vision_confidence    = 19; // Average YOLO confidence [0.0-1.0]
+}
+
+// A single action in the betting sequence.
+message ActionEntry {
+  uint32     seat       = 1; // Player seat index
+  ActionType action     = 2; // What they did
+  uint64     amount_bb100 = 3; // Amount in BB×100 (0 for check/fold)
+  Street     street     = 4; // Which street this action occurred on
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Response Messages
+// ─────────────────────────────────────────────────────────────────────
+
+// SolverResponse — the solver's recommended action.
+message SolverResponse {
+  // ── Identity (echo back for correlation) ────────────────────────
+  string session_id       = 1;
+  uint64 hand_number      = 2;
+
+  // ── GTO Decision ────────────────────────────────────────────────
+  ActionType recommended_action = 3;
+  uint64     raise_amount_bb100 = 4;  // If raising: size in BB×100
+
+  // ── Strategy Distribution (for mixed strategies) ────────────────
+  // The solver returns the full GTO frequency distribution.
+  // The client rolls a random number to select the actual action.
+  float fold_frequency    = 5;  // [0.0-1.0]
+  float check_frequency   = 6;
+  float call_frequency    = 7;
+  float raise_frequency   = 8;
+  float allin_frequency   = 9;
+
+  // ── Equity Estimate ─────────────────────────────────────────────
+  float equity            = 10; // Hero equity [0.0-1.0]
+  float ev_bb100          = 11; // Expected value in BB×100
+
+  // ── Exploitative Adjustment ─────────────────────────────────────
+  ExploitAdjustment exploit = 12;
+
+  // ── Performance Metadata ────────────────────────────────────────
+  uint32 solve_time_us    = 13; // Solver computation time (microseconds)
+  uint64 server_timestamp_ms = 14;
+  string engine_version   = 15;
+}
+
+// Exploitative adjustments based on opponent profiling.
+message ExploitAdjustment {
+  bool        applied              = 1;  // Whether exploit layer modified the GTO strategy
+  float       aggression_modifier  = 2;  // Multiplier: >1.0 = more aggressive, <1.0 = tighter
+  string      reasoning            = 3;  // Human-readable explanation (includes [PLO5/PLO6] tag)
+  string      opponent_archetype   = 4;  // "LAG", "TAG", "Fish", "Nit", "Maniac", "Whale"
+  GameVariant variant              = 5;  // Which variant thresholds were used for classification
+  bool        trusted              = 6;  // False if opponent has < 50 hands → pure GTO
+  uint32      opponent_hands       = 7;  // Sample size used for this classification
+}
+
+// Streaming updates during solve (for SolveStream RPC).
+message SolverUpdate {
+  enum UpdateType {
+    PROGRESS  = 0;  // Intermediate equity estimate
+    COMPLETE  = 1;  // Final decision
+  }
+  UpdateType type         = 1;
+  float      equity       = 2;  // Current equity estimate
+  float      progress     = 3;  // Completion fraction [0.0-1.0]
+  SolverResponse response = 4;  // Populated only when type=COMPLETE
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Opponent Profiling
+// ─────────────────────────────────────────────────────────────────────
+
+message OpponentQuery {
+  string      opponent_id   = 1;
+  GameVariant game_variant  = 2;  // MANDATORY: PLO5 or PLO6 — never mix stats
+}
+
+// OpponentProfile — VARIANT-ISOLATED, COUNT-BASED.
+//
+// Stats are stored as INTEGER COUNTS on the server.  Percentages are
+// computed at query time to prevent the "1-hand maniac" illusion.
+// The `trusted` flag implements the Trust Gate: if hands_played < 50,
+// the engine ignores this profile and plays pure GTO.
+message OpponentProfile {
+  // ── Identity ────────────────────────────────────────────────────
+  string      player_id     = 1;
+  string      screen_name   = 2;
+  GameVariant game_variant  = 3;   // Which variant these stats belong to
+
+  // ── Trust Gate ──────────────────────────────────────────────────
+  bool   trusted            = 4;   // hands_played >= 50 → true
+  uint32 hands_played       = 5;   // Sample size (the denominator)
+
+  // ── Computed Percentages [0.0-100.0] ────────────────────────────
+  // Derived from counts on-the-fly.  NEVER stored as percentages.
+  float vpip                = 6;   // vpip_count / hands_played
+  float pfr                 = 7;   // pfr_count / hands_played
+  float three_bet           = 8;   // three_bet_count / three_bet_opp
+  float aggression_factor   = 9;   // (total_bets + total_raises) / total_calls
+  float wtsd                = 10;  // wtsd_count / wtsd_opp
+  float wsd                 = 11;  // wsd_count / wtsd_count
+  float cbet_flop           = 12;  // cbet_flop_count / cbet_flop_opp
+  float fold_to_cbet        = 13;  // fold_to_cbet_count / fold_to_cbet_opp
+  float avg_sizing          = 14;  // bet_size_sum / bet_size_count (pot ratio)
+
+  // ── Raw Counters (for UI / advanced analytics) ──────────────────
+  uint32 vpip_count         = 15;
+  uint32 pfr_count          = 16;
+  uint32 three_bet_count    = 17;
+  uint32 three_bet_opp      = 18;
+  uint32 cbet_flop_count    = 19;
+  uint32 cbet_flop_opp      = 20;
+  uint32 fold_to_cbet_count = 21;
+  uint32 fold_to_cbet_opp   = 22;
+  uint32 wtsd_count         = 23;
+  uint32 wtsd_opp           = 24;
+  uint32 wsd_count          = 25;
+  uint32 total_bets         = 26;
+  uint32 total_raises       = 27;
+  uint32 total_calls        = 28;
+
+  // ── Classification ──────────────────────────────────────────────
+  string archetype          = 29;  // Auto-classified: whale/fish/nit/lag/tag/reg/unknown
+  string player_type        = 30;  // Manual override label
+  string notes              = 31;
+  string last_seen          = 32;  // ISO-8601 timestamp
+}
+
+// End-of-hand result for profiling database updates.
+// The client sends this after each hand.  The server increments the
+// correct counters in the variant-isolated player_stats table.
+message HandResult {
+  string      session_id       = 1;
+  uint64      hand_number      = 2;
+  GameVariant game_variant     = 3;   // MANDATORY: route to PLO5 or PLO6 stats row
+
+  // Per-player hand summaries (one entry per player at the table)
+  repeated PlayerHandSummary player_summaries = 4;
+
+  // Full action log (for hand_history table)
+  repeated ActionEntry actions = 5;
+
+  // Outcome
+  string   winner_id           = 6;
+  uint64   pot_won_bb100       = 7;
+}
+
+// PlayerHandSummary — pre-parsed flags for a single player in a single hand.
+// The gateway uses these to do atomic counter increments instead of
+// re-parsing the full action log.
+message PlayerHandSummary {
+  string player_id       = 1;
+  string screen_name     = 2;
+
+  // Pre-flop
+  bool   voluntary       = 3;   // VPIP: voluntarily put money in
+  bool   raised_preflop  = 4;   // PFR
+  bool   had_3bet_opp    = 5;   // Faced a raise → had opportunity to 3-bet
+  bool   did_3bet        = 6;   // Actually 3-bet
+
+  // Post-flop
+  bool   had_cbet_opp    = 7;   // Was preflop aggressor with flop action
+  bool   did_cbet        = 8;   // Fired the c-bet
+  bool   faced_cbet      = 9;   // Faced a c-bet as defender
+  bool   folded_to_cbet  = 10;  // Folded to the c-bet
+
+  // Showdown
+  bool   saw_river       = 11;  // Made it to river
+  bool   went_to_showdown = 12; // Went to showdown
+  bool   won_at_showdown = 13;  // Won at showdown
+
+  // Postflop aggression (for AF + sizing)
+  repeated PostflopAction postflop_actions = 14;
+}
+
+// A single postflop action for AF calculation + bet sizing tracking.
+message PostflopAction {
+  ActionType type      = 1;   // BET, RAISE, or CALL
+  float      pot_ratio = 2;   // amount / pot_size (for sizing analysis)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Utility Messages
+// ─────────────────────────────────────────────────────────────────────
+
+message Ack {
+  bool   success = 1;
+  string message = 2;
+}
+
+message PingRequest {
+  uint64 client_timestamp_ms = 1;
+}
+
+message PingResponse {
+  uint64 client_timestamp_ms = 1; // Echoed back
+  uint64 server_timestamp_ms = 2; // Server's clock
+  uint32 active_sessions     = 3; // Current load
+}

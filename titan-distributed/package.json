@@ -1,0 +1,24 @@
+{
+  "name": "titan-distributed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Titan Distributed Cloud — PLO5/PLO6 Edge-to-Cloud Poker Engine",
+  "workspaces": [
+    "packages/client-electron",
+    "packages/cloud-gateway"
+  ],
+  "scripts": {
+    "dev:client": "npm run dev --workspace=packages/client-electron",
+    "dev:cloud": "npm run dev --workspace=packages/cloud-gateway",
+    "build:client": "npm run build --workspace=packages/client-electron",
+    "build:cloud": "npm run build --workspace=packages/cloud-gateway",
+    "build:engine": "cd packages/core-engine && cargo build --release",
+    "test": "npm run test --workspaces",
+    "test:engine": "cd packages/core-engine && cargo test",
+    "proto:gen": "bash scripts/proto-gen.sh",
+    "lint": "npm run lint --workspaces"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  }
+}

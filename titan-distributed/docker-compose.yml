@@ -1,0 +1,50 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL — Opponent Profiling DB ────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: titan
+      POSTGRES_USER: titan
+      POSTGRES_PASSWORD: titan_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U titan"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Cloud Gateway — gRPC Server ──────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: packages/cloud-gateway/Dockerfile
+    ports:
+      - "50051:50051"
+    environment:
+      TITAN_PORT: "50051"
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: titan
+      PG_USER: titan
+      PG_PASSWORD: titan_dev_password
+      LOG_LEVEL: debug
+      NODE_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Redis — Session Cache (optional) ─────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+volumes:
+  pgdata:

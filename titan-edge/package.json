@@ -1,0 +1,43 @@
+{
+  "name": "titan-edge-ai",
+  "version": "1.0.0",
+  "description": "Titan Edge AI — Omaha PLO5/PLO6 Poker Engine (Electron + WebGPU)",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development electron .",
+    "test": "vitest run",
+    "test:adb": "node src/main/execution/__tests__/adb-bridge.test.js",
+    "test:equity": "node src/main/brain/__tests__/equity-worker.test.js",
+    "lint": "eslint src/ --ext .js,.ts",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "poker",
+    "omaha",
+    "plo5",
+    "plo6",
+    "edge-ai",
+    "electron",
+    "webgpu"
+  ],
+  "author": "Titan Team",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0",
+    "eslint": "^9.0.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgpu": "^4.22.0",
+    "better-sqlite3": "^11.0.0",
+    "electron-log": "^5.2.0",
+    "pokenode-ts": "^1.20.0",
+    "pokersolver": "^2.1.2"
+  }
+}
