@@ -55,6 +55,7 @@ const TARGET = Object.freeze({
 
 /** Known LDPlayer adb.exe installation paths (Windows) */
 const ADB_SEARCH_PATHS = [
+  "F:\\LDPlayer\\LDPlayer9\\adb.exe",
   "C:\\LDPlayer\\LDPlayer9\\adb.exe",
   "C:\\LDPlayer\\LDPlayer4.0\\adb.exe",
   "C:\\Program Files\\LDPlayer\\LDPlayer9\\adb.exe",
@@ -136,6 +137,24 @@ async function bootstrapEmulator(opts = {}) {
     return result;
   }
   log.info(`[Bootstrap] ADB binary: ${adbPath}`);
+
+  // ── Step 1b: Force TCP connect (LDPlayer local bridge) ────────
+  // LDPlayer exposes ADB over TCP. We must explicitly connect before
+  // "adb devices" will show it.  Try port 5555, fallback to 5557.
+  for (const port of [5555, 5557]) {
+    try {
+      const { stdout } = await execFileAsync(
+        adbPath,
+        ["connect", `127.0.0.1:${port}`],
+        { timeout: CMD_TIMEOUT, windowsHide: true },
+      );
+      const out = stdout.trim();
+      log.info(`[Bootstrap] adb connect 127.0.0.1:${port} → ${out}`);
+      if (out.includes("connected") || out.includes("already")) break;
+    } catch (err) {
+      log.debug(`[Bootstrap] connect :${port} failed: ${err.message}`);
+    }
+  }
 
   // ── Step 2: Ping Device ───────────────────────────────────────
   const device = await resolveDevice(adbPath, opts.device || DEFAULT_DEVICE);

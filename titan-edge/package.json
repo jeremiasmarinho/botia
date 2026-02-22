@@ -6,6 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
+    "shadow": "electron src/main/shadow-mode.js",
+    "shadow:dev": "cross-env NODE_ENV=development electron src/main/shadow-mode.js",
     "test": "vitest run",
     "test:adb": "node src/main/execution/__tests__/adb-bridge.test.js",
     "test:equity": "node src/main/brain/__tests__/equity-worker.test.js",

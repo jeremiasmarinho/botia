@@ -928,6 +928,135 @@ class OpponentDb {
   getThresholds(variant) {
     return VARIANT_THRESHOLDS[variant] || VARIANT_THRESHOLDS.PLO5;
   }
+
+  // ─── KNN: Find Similar Opponents ─────────────────────────
+
+  /**
+   * Find the K most similar opponents to `targetPlayerId` using
+   * Range-Normalized Euclidean Distance computed in SQL.
+   *
+   * Each stat dimension is divided by its natural range (derived
+   * from VARIANT_THRESHOLDS) so that high-variance stats like
+   * VPIP (range ~45 in PLO6) don't dominate low-variance stats
+   * like 3-Bet (range ~13).
+   *
+   * Distance formula:
+   *   d² = Σ( ((stat_i - target_i) / range_i)² )
+   *
+   * Only considers players who pass the trust gate (≥ MIN_TRUST_HANDS).
+   * Excludes the target player from results.
+   *
+   * @param {string} targetPlayerId — Player to find neighbors for
+   * @param {string} variant — 'PLO5' | 'PLO6'
+   * @param {number} [k=5] — Number of neighbors to return
+   * @returns {{ neighbors: Array<{profile: Object, distance: number}>, target: Object|null }}
+   */
+  findSimilar(targetPlayerId, variant, k = 5) {
+    const target = this.getProfile(targetPlayerId, variant);
+    if (!target || !target.trusted) {
+      return { neighbors: [], target };
+    }
+
+    const t = VARIANT_THRESHOLDS[variant] || VARIANT_THRESHOLDS.PLO5;
+
+    // Compute natural ranges from thresholds.
+    // Each range represents the meaningful spread of that stat
+    // within the variant's population.
+    const ranges = {
+      vpip: t.vpip_loose - t.vpip_tight + 30, // full spread ~55 PLO5, ~60 PLO6
+      pfr: t.pfr_agg - t.pfr_passive + 15, // ~33 PLO5, ~35 PLO6
+      af: t.af_agg - t.af_passive + 1.0, // ~2.7 PLO5, ~2.6 PLO6
+      three_bet: 15, // 3-bet range is ~0-15% universally
+      cbet: t.cbet_high - t.cbet_low + 20, // ~55 PLO5, ~50 PLO6
+      fold_to_cbet: 60, // 0-60% is realistic range
+      wtsd: t.wtsd_high - t.wtsd_low + 15, // ~28 PLO5, ~29 PLO6
+    };
+
+    // SQL computes the entire distance in-engine.
+    // Each column is: ((computed_pct - target_value) / range)²
+    // We use the raw fraction columns to compute percentages inline.
+    const sql = `
+      SELECT
+        ps.player_id,
+        p.screen_name,
+        ps.hands_played,
+        -- Range-normalized squared Euclidean distance
+        (
+          POWER((CAST(ps.vpip_count AS REAL) / ps.hands_played * 100.0 - ?) / ?, 2) +
+          POWER((CAST(ps.pfr_count  AS REAL) / ps.hands_played * 100.0 - ?) / ?, 2) +
+          POWER((
+            CASE WHEN (ps.total_bets + ps.total_raises) > 0 AND ps.total_calls > 0
+                 THEN CAST(ps.total_bets + ps.total_raises AS REAL) / ps.total_calls
+                 ELSE 0.0 END - ?
+          ) / ?, 2) +
+          POWER((
+            CASE WHEN ps.three_bet_opp > 0
+                 THEN CAST(ps.three_bet_count AS REAL) / ps.three_bet_opp * 100.0
+                 ELSE 0.0 END - ?
+          ) / ?, 2) +
+          POWER((
+            CASE WHEN ps.cbet_flop_opp > 0
+                 THEN CAST(ps.cbet_flop_count AS REAL) / ps.cbet_flop_opp * 100.0
+                 ELSE 0.0 END - ?
+          ) / ?, 2) +
+          POWER((
+            CASE WHEN ps.fold_to_cbet_opp > 0
+                 THEN CAST(ps.fold_to_cbet_count AS REAL) / ps.fold_to_cbet_opp * 100.0
+                 ELSE 0.0 END - ?
+          ) / ?, 2) +
+          POWER((
+            CASE WHEN ps.wtsd_opp > 0
+                 THEN CAST(ps.wtsd_count AS REAL) / ps.wtsd_opp * 100.0
+                 ELSE 0.0 END - ?
+          ) / ?, 2)
+        ) AS distance
+      FROM player_stats ps
+      JOIN players p ON p.player_id = ps.player_id
+      WHERE ps.game_variant = ?
+        AND ps.hands_played >= ?
+        AND ps.player_id != ?
+      ORDER BY distance ASC
+      LIMIT ?
+    `;
+
+    const rows = this._db.prepare(sql).all(
+      // vpip
+      target.vpip,
+      ranges.vpip,
+      // pfr
+      target.pfr,
+      ranges.pfr,
+      // af
+      target.af,
+      ranges.af,
+      // 3-bet
+      target.three_bet,
+      ranges.three_bet,
+      // cbet
+      target.cbet_flop,
+      ranges.cbet,
+      // fold_to_cbet
+      target.fold_to_cbet,
+      ranges.fold_to_cbet,
+      // wtsd
+      target.wtsd,
+      ranges.wtsd,
+      // filters
+      variant,
+      MIN_TRUST_HANDS,
+      targetPlayerId,
+      k,
+    );
+
+    const neighbors = rows.map((row) => ({
+      profile: this.getProfile(row.player_id, variant),
+      distance: Math.round(Math.sqrt(row.distance) * 1000) / 1000,
+      screen_name: row.screen_name,
+      hands_played: row.hands_played,
+    }));
+
+    return { neighbors, target };
+  }
 }
 
 module.exports = {

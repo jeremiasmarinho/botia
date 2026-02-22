@@ -42,6 +42,7 @@ const { AdbBridge } = require("./execution/adb-bridge");
 const { SolverBridge, GameVariant } = require("./brain/solver-bridge");
 const { GtoEngine } = require("./brain/gto-engine");
 const { OpponentDb } = require("./profiling/opponent-db");
+const { GameLoop } = require("./game-loop");
 
 // ── Configuration ───────────────────────────────────────────────────
 
@@ -66,6 +67,9 @@ let solver = null;
 
 /** @type {OpponentDb} */
 let opponentDb = null;
+
+/** @type {GameLoop} Centralized state machine */
+let gameLoop = null;
 
 /** @type {import('./execution/adb-bootstrap').BootstrapResult|null} */
 let bootstrapResult = null;
@@ -95,6 +99,9 @@ app.whenReady().then(async () => {
 
   // 3. Register IPC handlers
   registerIpcHandlers();
+
+  // 4. Initialize Game Loop (AFTER all subsystems are ready)
+  initGameLoop();
 
   log.info("[Titan] All systems initialized.");
   logSystemSummary();
@@ -253,6 +260,62 @@ async function initOpponentDb() {
   }
 }
 
+// ── Game Loop Initialization ────────────────────────────────────────
+
+function initGameLoop() {
+  gameLoop = new GameLoop({
+    adb,
+    solver,
+    GtoEngine,
+    opponentDb,
+    log,
+
+    /**
+     * Control inference window capture FPS.
+     * Sends VISION_CONFIG to the hidden BrowserWindow.
+     */
+    setVisionFps: (fps) => {
+      if (inferenceWindow && !inferenceWindow.isDestroyed()) {
+        inferenceWindow.webContents.send(IPC.VISION_CONFIG, { fps });
+      }
+    },
+
+    /** Pause vision capture (freeze during CALCULATING/EXECUTING). */
+    pauseVision: () => {
+      if (inferenceWindow && !inferenceWindow.isDestroyed()) {
+        inferenceWindow.webContents.send(IPC.VISION_STOP);
+      }
+    },
+
+    /** Resume vision capture (re-enter WAITING). */
+    resumeVision: () => {
+      if (inferenceWindow && !inferenceWindow.isDestroyed()) {
+        inferenceWindow.webContents.send(IPC.VISION_START, {});
+      }
+    },
+  });
+
+  // ── Forward Game Loop events to Dashboard ─────────────────────
+  gameLoop.on("stateChange", (data) => {
+    mainWindow?.webContents.send(IPC.GAMELOOP_STATE, data);
+    log.debug(`[GameLoop] ${data.previousState || "INIT"} → ${data.state}`);
+  });
+
+  gameLoop.on("cycleComplete", (data) => {
+    mainWindow?.webContents.send(IPC.GAMELOOP_CYCLE, data);
+  });
+
+  gameLoop.on("perception", (data) => {
+    mainWindow?.webContents.send(IPC.GAMELOOP_PERCEPTION, data);
+  });
+
+  gameLoop.on("actionExecuted", (data) => {
+    mainWindow?.webContents.send(IPC.ADB_TAP_RESULT, data);
+  });
+
+  log.info("[GameLoop] Initialized — ready to start via IPC");
+}
+
 // ── IPC Handlers ────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
@@ -304,17 +367,25 @@ function registerIpcHandlers() {
   });
 
   // ── ADB Tap ───────────────────────────────────────────────────
-  ipcMain.handle(IPC.ADB_TAP, async (_event, { x, y, ghost }) => {
-    if (!adb?.connected) {
-      return { error: "ADB not connected" };
-    }
-    try {
-      const result = ghost ? await adb.ghostTap(x, y) : await adb.tap(x, y);
-      return result;
-    } catch (err) {
-      return { error: err.message };
-    }
-  });
+  ipcMain.handle(
+    IPC.ADB_TAP,
+    async (_event, { bbox, difficulty, x, y, ghost }) => {
+      if (!adb?.connected) {
+        return { error: "ADB not connected" };
+      }
+      try {
+        // v2: Full pipeline with cognitive delay + mutex + Gaussian tap
+        if (bbox) {
+          return await adb.executeAction(bbox, difficulty || "medium");
+        }
+        // Legacy: raw coordinate tap (dev/debug only)
+        const result = ghost ? await adb.ghostTap(x, y) : await adb.tap(x, y);
+        return result;
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+  );
 
   // ── Decision Engine (GTO + exploitative overlay) ──────────────
   ipcMain.handle(IPC.DECISION_MADE, async (_event, gameState) => {
@@ -352,6 +423,11 @@ function registerIpcHandlers() {
 
     // Forward detection summary to dashboard
     mainWindow?.webContents.send(IPC.VISION_DETECTIONS, payload);
+
+    // ── Feed into Game Loop (the SOLE consumer of vision data) ──
+    if (gameLoop?.running) {
+      gameLoop.onVisionFrame(payload);
+    }
   });
 
   // ── Vision: Status from inference window ──────────────────────
@@ -429,6 +505,13 @@ function registerIpcHandlers() {
         : null,
       uptime: process.uptime(),
       memory: process.memoryUsage(),
+      gameLoop: gameLoop
+        ? {
+            state: gameLoop.state,
+            running: gameLoop.running,
+            ...gameLoop.stats,
+          }
+        : null,
     };
   });
 
@@ -436,6 +519,25 @@ function registerIpcHandlers() {
   ipcMain.handle(IPC.SOLVER_STATS, async () => {
     if (!solver) return { error: "Solver not ready" };
     return solver.getStats();
+  });
+
+  // ── Game Loop Controls ────────────────────────────────────────
+  ipcMain.handle(IPC.GAMELOOP_START, async () => {
+    if (!gameLoop) return { error: "Game Loop not initialized" };
+    if (!adb?.connected) return { error: "ADB not connected" };
+    gameLoop.start();
+    return { ok: true, state: gameLoop.state };
+  });
+
+  ipcMain.handle(IPC.GAMELOOP_STOP, async () => {
+    if (!gameLoop) return { error: "Game Loop not initialized" };
+    gameLoop.stop();
+    return { ok: true, state: gameLoop.state };
+  });
+
+  ipcMain.handle(IPC.GAMELOOP_STATS, async () => {
+    if (!gameLoop) return { error: "Game Loop not initialized" };
+    return gameLoop.stats;
   });
 }
 
@@ -448,10 +550,12 @@ function logSystemSummary() {
   const dbOk = opponentDb ? "Ready" : "Failed";
   const inferOk =
     inferenceWindow && !inferenceWindow.isDestroyed() ? "Ready" : "Failed";
+  const mode = "LIVE";
 
   log.info("╔══════════════════════════════════════════════════╗");
-  log.info("║          TITAN EDGE AI v2 — SYSTEM STATUS       ║");
+  log.info("║          TITAN EDGE AI v3 — SYSTEM STATUS       ║");
   log.info("╠══════════════════════════════════════════════════╣");
+  log.info(`║  Mode:       ${mode.padEnd(35)}║`);
   log.info(`║  Solver:     ${native.padEnd(35)}║`);
   log.info(`║  Version:    ${solverVersion.padEnd(35)}║`);
   log.info(`║  ADB:        ${adbOk.padEnd(35)}║`);
@@ -468,6 +572,7 @@ function logSystemSummary() {
 
 async function shutdown() {
   try {
+    if (gameLoop) gameLoop.stop();
     if (solver) await solver.shutdown();
     if (opponentDb) opponentDb.close();
     if (inferenceWindow && !inferenceWindow.isDestroyed()) {

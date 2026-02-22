@@ -1,0 +1,82 @@
+description: Ultralytics titan_v7_hybrid model trained on /content/workspace/hybrid_data.yaml
+author: Ultralytics
+date: '2026-02-22T02:45:58.502151'
+version: 8.4.14
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: 2c
+  1: 2d
+  2: 2h
+  3: 2s
+  4: 3c
+  5: 3d
+  6: 3h
+  7: 3s
+  8: 4c
+  9: 4d
+  10: 4h
+  11: 4s
+  12: 5c
+  13: 5d
+  14: 5h
+  15: 5s
+  16: 6c
+  17: 6d
+  18: 6h
+  19: 6s
+  20: 7c
+  21: 7d
+  22: 7h
+  23: 7s
+  24: 8c
+  25: 8d
+  26: 8h
+  27: 8s
+  28: 9c
+  29: 9d
+  30: 9h
+  31: 9s
+  32: Tc
+  33: Td
+  34: Th
+  35: Ts
+  36: Jc
+  37: Jd
+  38: Jh
+  39: Js
+  40: Qc
+  41: Qd
+  42: Qh
+  43: Qs
+  44: Kc
+  45: Kd
+  46: Kh
+  47: Ks
+  48: Ac
+  49: Ad
+  50: Ah
+  51: As
+  52: fold
+  53: check
+  54: raise
+  55: raise_2x
+  56: raise_2_5x
+  57: raise_pot
+  58: raise_confirm
+  59: allin
+  60: pot
+  61: stack
+args:
+  batch: 1
+  half: false
+  int8: false
+  nms: false
+channels: 3
+end2end: false

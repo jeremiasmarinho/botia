@@ -10,7 +10,16 @@
 "use strict";
 
 const { contextBridge, ipcRenderer } = require("electron");
-const IPC = require("../shared/ipc-channels");
+
+// IPC channel names (inlined to avoid require issues in sandboxed preload)
+const IPC = {
+  VISION_DETECTIONS: "vision:detections",
+  VISION_STATUS: "vision:status",
+  VISION_ERROR: "vision:error",
+  VISION_START: "vision:start",
+  VISION_STOP: "vision:stop",
+  VISION_CONFIG: "vision:config",
+};
 
 contextBridge.exposeInMainWorld("inferenceAPI", {
   // ── Outbound (inference → main) ─────────────────────────────────

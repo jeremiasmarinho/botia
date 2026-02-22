@@ -4,11 +4,14 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'"
     />
     <title>Titan Inference Engine</title>
   </head>
   <body>
+    <!-- TensorFlow.js browser bundles (global `tf` object) -->
+    <script src="../assets/tf.min.js"></script>
+    <script src="../assets/tf-backend-webgpu.min.js"></script>
     <!-- Hidden window — no visible UI. All work happens in inference.js -->
     <script src="inference.js"></script>
   </body>

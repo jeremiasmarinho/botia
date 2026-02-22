@@ -1,0 +1,43 @@
+# ──────────────────────────────────────────────
+# Dependencies
+# ──────────────────────────────────────────────
+node_modules/
+package-lock.json
+
+# ──────────────────────────────────────────────
+# Electron dist (downloaded binary ~200MB)
+# ──────────────────────────────────────────────
+# The electron binary is installed via npm/setup script
+# and should never be committed.
+
+# ──────────────────────────────────────────────
+# TF.js large assets (model weights + runtime)
+# ──────────────────────────────────────────────
+# Model shards (~12MB) and TF.js bundles (~1.7MB)
+# are deployed via build/export scripts.
+src/assets/yolo/*.bin
+src/assets/tf.min.js
+src/assets/tf-backend-webgpu.min.js
+
+# ──────────────────────────────────────────────
+# Shadow mode debug logs
+# ──────────────────────────────────────────────
+shadow_*.log
+shadow_*.txt
+*.log
+
+# ──────────────────────────────────────────────
+# Build / install artifacts
+# ──────────────────────────────────────────────
+electron_install*.log
+setup_electron.ps1
+out/
+dist/
+
+# ──────────────────────────────────────────────
+# OS / IDE
+# ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

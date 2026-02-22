@@ -113,7 +113,7 @@ const CLASS_NAMES = {
 
 // ── State ───────────────────────────────────────────────────────────
 
-let tf = null;
+// tf is loaded globally via <script> tags in inference.html
 let model = null;
 let backend = null;
 let running = false;
@@ -128,6 +128,11 @@ let lastFrameTime = 0;
 let confidenceThreshold = DEFAULT_CONFIDENCE;
 let iouThreshold = DEFAULT_IOU;
 
+// Letterbox transform parameters (updated each frame)
+let letterboxScale = 1;
+let letterboxPadX = 0;
+let letterboxPadY = 0;
+
 // ── Initialization ──────────────────────────────────────────────────
 
 /**
@@ -135,8 +140,11 @@ let iouThreshold = DEFAULT_IOU;
  */
 async function initModel() {
   try {
-    tf = await import("@tensorflow/tfjs");
-    await import("@tensorflow/tfjs-backend-webgpu");
+    // tf is already loaded globally via <script> tags
+    if (typeof tf === "undefined") {
+      sendError("TF.js not loaded — check script tags in inference.html", true);
+      return;
+    }
 
     // Backend priority: WebGPU → WebGL → CPU (never acceptable)
     const backends = ["webgpu", "webgl"];
@@ -288,6 +296,11 @@ async function inferenceFrame(timestamp) {
   lastFrameTime = timestamp;
 
   if (!model || !videoEl || videoEl.readyState < 2) {
+    if (frameId % 25 === 0) {
+      console.log(
+        `[Inference] Waiting for video: readyState=${videoEl?.readyState || "null"}, model=${!!model}`,
+      );
+    }
     requestInferenceLoop();
     return;
   }
@@ -295,37 +308,88 @@ async function inferenceFrame(timestamp) {
   const currentFrame = ++frameId;
   const t0 = performance.now();
 
+  // Log every 50th frame for debugging
+  if (currentFrame % 50 === 1) {
+    console.log(
+      `[Inference] Frame #${currentFrame} (video ${videoEl.videoWidth}×${videoEl.videoHeight})`,
+    );
+  }
+
+  // Track tensors for guaranteed cleanup on any error path.
+  // Without this, a throw between tf.tidy() and .dispose() leaks
+  // one 640×640×3 float32 tensor (~4.7 MB) per failed frame.
+  let inputTensor = null;
+  let rawOutput = null;
+
   try {
-    // 1. Grab frame → offscreen canvas → resize to 640×640
-    offscreenCtx.drawImage(videoEl, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+    // 1. Grab frame → letterbox to 640×640 (preserve aspect ratio)
+    const vw = videoEl.videoWidth;
+    const vh = videoEl.videoHeight;
+    if (vw > 0 && vh > 0) {
+      letterboxScale = Math.min(MODEL_INPUT_SIZE / vw, MODEL_INPUT_SIZE / vh);
+      const newW = Math.round(vw * letterboxScale);
+      const newH = Math.round(vh * letterboxScale);
+      letterboxPadX = Math.round((MODEL_INPUT_SIZE - newW) / 2);
+      letterboxPadY = Math.round((MODEL_INPUT_SIZE - newH) / 2);
+
+      // Fill with YOLO standard gray (114,114,114), then draw centered
+      offscreenCtx.fillStyle = "rgb(114,114,114)";
+      offscreenCtx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+      offscreenCtx.drawImage(videoEl, letterboxPadX, letterboxPadY, newW, newH);
+    } else {
+      offscreenCtx.drawImage(videoEl, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+    }
+
+    // Log letterbox params once
+    if (currentFrame === 1) {
+      console.log(
+        `[Inference] Letterbox: ${vw}×${vh} → ${Math.round(vw * letterboxScale)}×${Math.round(vh * letterboxScale)} + pad(${letterboxPadX},${letterboxPadY}) in ${MODEL_INPUT_SIZE}×${MODEL_INPUT_SIZE}`,
+      );
+    }
 
     // 2. Preprocess: canvas → tensor → normalize [0,1] → batch dim
-    const inputTensor = tf.tidy(() => {
+    inputTensor = tf.tidy(() => {
       const pixels = tf.browser.fromPixels(offscreenCanvas);
       return pixels.div(255.0).expandDims(0);
     });
 
     // 3. Run YOLO inference on GPU
-    const rawOutput = await model.predict(inputTensor);
-    inputTensor.dispose();
+    rawOutput = await model.predict(inputTensor);
+
+    // Debug: log output shape on first frame
+    if (currentFrame <= 2) {
+      const shape = Array.isArray(rawOutput)
+        ? rawOutput.map((t) => t.shape)
+        : rawOutput.shape;
+      console.log(`[Inference] Output shape: ${JSON.stringify(shape)}`);
+    }
 
     // 4. Post-process: decode boxes + class-aware NMS
     const detections = await postProcess(rawOutput);
 
-    // 5. Dispose output tensors
-    if (Array.isArray(rawOutput)) {
-      rawOutput.forEach((t) => t.dispose());
-    } else {
-      rawOutput.dispose();
-    }
-
     const inferenceMs = Math.round((performance.now() - t0) * 10) / 10;
 
-    // 6. Send detections to main process via IPC
+    // Debug: log detection count periodically
+    if (detections.length > 0 || currentFrame % 50 === 1) {
+      console.log(
+        `[Inference] Frame #${currentFrame}: ${detections.length} detections in ${inferenceMs}ms`,
+      );
+    }
+
+    // 5. Send detections to main process via IPC
     sendDetections(detections, inferenceMs, currentFrame);
   } catch (err) {
     console.error("[Inference] Frame error:", err);
     // Don't kill the loop for transient errors
+  } finally {
+    // Guaranteed tensor cleanup — prevents memory leak in 12h+ sessions.
+    if (inputTensor && !inputTensor.isDisposed) inputTensor.dispose();
+    if (rawOutput) {
+      const outputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
+      for (const t of outputs) {
+        if (t && !t.isDisposed) t.dispose();
+      }
+    }
   }
 
   // Schedule next frame
@@ -337,7 +401,9 @@ async function inferenceFrame(timestamp) {
 /**
  * Decode YOLOv8 output and apply Non-Maximum Suppression.
  *
- * YOLOv8 output: [1, 66, 8400] → transpose → [8400, 66]
+ * Original YOLOv8 (PyTorch/ONNX):  [1, 66, 8400] → need transpose → [8400, 66]
+ * After onnx2tf (TFJS SavedModel): [1, 8400, 66]  → already correct → [8400, 66]
+ *
  *   - [0..3] = cx, cy, w, h (box coordinates)
  *   - [4..65] = 62 class scores
  *
@@ -347,17 +413,33 @@ async function inferenceFrame(timestamp) {
 async function postProcess(rawOutput) {
   const output = Array.isArray(rawOutput) ? rawOutput[0] : rawOutput;
 
-  // Squeeze batch dim + transpose: [66, 8400] → [8400, 66]
-  const transposed = output.squeeze().transpose();
-  const data = await transposed.array();
-  transposed.dispose();
+  // Squeeze batch dim: [1, X, Y] → [X, Y]
+  const squeezed = output.squeeze();
+  const shape = squeezed.shape;
+
+  // Auto-detect layout: if shape is [66, 8400] → transpose; if [8400, 66] → use as-is
+  let data2d;
+  if (shape[0] < shape[1]) {
+    // shape is [66, 8400] (original NCHW order) → transpose to [8400, 66]
+    const transposed = squeezed.transpose();
+    data2d = await transposed.array();
+    transposed.dispose();
+  } else {
+    // shape is [8400, 66] (onnx2tf NHWC order) → already correct
+    data2d = await squeezed.array();
+  }
+  squeezed.dispose();
 
   const boxes = [];
   const scores = [];
   const classIds = [];
 
-  for (let i = 0; i < data.length; i++) {
-    const prediction = data[i];
+  // ── DEBUG: every 150 frames, dump ALL predictions above 0.10 ──
+  const debugFrame = frameId % 150 === 1;
+  const debugHits = [];
+
+  for (let i = 0; i < data2d.length; i++) {
+    const prediction = data2d[i];
     const cx = prediction[0];
     const cy = prediction[1];
     const w = prediction[2];
@@ -373,6 +455,18 @@ async function postProcess(rawOutput) {
       }
     }
 
+    // Debug: collect all predictions above 0.10
+    if (debugFrame && maxScore >= 0.1) {
+      debugHits.push({
+        cls: CLASS_NAMES[maxClass] || `c${maxClass}`,
+        score: Math.round(maxScore * 100),
+        cx: Math.round(cx),
+        cy: Math.round(cy),
+        w: Math.round(w),
+        h: Math.round(h),
+      });
+    }
+
     if (maxScore < confidenceThreshold) continue;
 
     // Convert to normalized [y1, x1, y2, x2] for TF.js NMS
@@ -384,6 +478,21 @@ async function postProcess(rawOutput) {
     boxes.push([y1, x1, y2, x2]);
     scores.push(maxScore);
     classIds.push(maxClass);
+  }
+
+  // ── DEBUG: dump low-threshold hits ──
+  if (debugFrame && debugHits.length > 0) {
+    // Sort by score descending, show top 20
+    debugHits.sort((a, b) => b.score - a.score);
+    const top = debugHits.slice(0, 20);
+    console.log(
+      `[DEBUG] Frame #${frameId} — ${debugHits.length} predictions ≥10%:\n` +
+        top
+          .map((h) => `  ${h.cls}=${h.score}% @(${h.cx},${h.cy}) ${h.w}×${h.h}`)
+          .join("\n"),
+    );
+  } else if (debugFrame) {
+    console.log(`[DEBUG] Frame #${frameId} — 0 predictions ≥10%`);
   }
 
   if (boxes.length === 0) return [];
@@ -406,17 +515,30 @@ async function postProcess(rawOutput) {
   scoresTensor.dispose();
   nmsIndices.dispose();
 
-  // Build final detection array
+  // Build final detection array — reverse letterbox transform
+  const origW = videoEl ? videoEl.videoWidth : MODEL_INPUT_SIZE;
+  const origH = videoEl ? videoEl.videoHeight : MODEL_INPUT_SIZE;
+
   return selectedIndices.map((idx) => {
     const [y1, x1, y2, x2] = boxes[idx];
+    // Convert normalized model coords → model pixels → remove pad → unscale → normalize to original image
+    const ox1 =
+      (x1 * MODEL_INPUT_SIZE - letterboxPadX) / letterboxScale / origW;
+    const oy1 =
+      (y1 * MODEL_INPUT_SIZE - letterboxPadY) / letterboxScale / origH;
+    const ox2 =
+      (x2 * MODEL_INPUT_SIZE - letterboxPadX) / letterboxScale / origW;
+    const oy2 =
+      (y2 * MODEL_INPUT_SIZE - letterboxPadY) / letterboxScale / origH;
+
     return {
       classId: classIds[idx],
       label: CLASS_NAMES[classIds[idx]] || `class_${classIds[idx]}`,
       confidence: Math.round(scores[idx] * 1000) / 1000,
-      cx: (x1 + x2) / 2,
-      cy: (y1 + y2) / 2,
-      w: x2 - x1,
-      h: y2 - y1,
+      cx: (ox1 + ox2) / 2,
+      cy: (oy1 + oy2) / 2,
+      w: ox2 - ox1,
+      h: oy2 - oy1,
     };
   });
 }
@@ -500,6 +622,12 @@ window.inferenceAPI.onConfig((config) => {
   if (config.iou !== undefined) {
     iouThreshold = config.iou;
     console.log(`[Inference] IoU threshold → ${iouThreshold}`);
+  }
+  if (config.fps !== undefined && config.fps > 0) {
+    fpsInterval = 1000 / config.fps;
+    console.log(
+      `[Inference] FPS → ${config.fps} (interval=${fpsInterval.toFixed(1)}ms)`,
+    );
   }
 });
 

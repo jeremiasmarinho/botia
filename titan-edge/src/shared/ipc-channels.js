@@ -44,6 +44,14 @@ const IPC = Object.freeze({
   ENGINE_STATE: "engine:state",
   HEALTH_REPORT: "engine:health-report",
 
+  // ── Game Loop (state machine) ──────────────────────────────────────
+  GAMELOOP_START: "gameloop:start",
+  GAMELOOP_STOP: "gameloop:stop",
+  GAMELOOP_STATE: "gameloop:state",
+  GAMELOOP_STATS: "gameloop:stats",
+  GAMELOOP_CYCLE: "gameloop:cycle",
+  GAMELOOP_PERCEPTION: "gameloop:perception",
+
   // ── Config ────────────────────────────────────────────────────────
   CONFIG_LOAD: "config:load",
   CONFIG_UPDATE: "config:update",
