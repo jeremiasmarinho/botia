@@ -389,7 +389,12 @@ class GameLoop extends EventEmitter {
       let action, equity, confidence, reasoning;
 
       // ── Primary: Solver full solve (Rust N-API / JS fallback) ─
-      if (this._solver?.initialized) {
+      // NOTE: The Rust CFR solver only supports PLO5/PLO6 (format 0/1).
+      // For NLHE (2 hero cards), we skip directly to the equity+GtoEngine
+      // fallback which uses the raw Monte Carlo equity() function instead.
+      const isNlhe = gameState.heroCards.length <= 2;
+
+      if (this._solver?.initialized && !isNlhe) {
         try {
           const result = this._solver.solveFromIds({
             heroIds: gameState.heroCards,
@@ -752,7 +757,21 @@ class GameLoop extends EventEmitter {
     const street = streetMap[board.length] || "flop";
 
     // Determine variant from hero card count
-    const variant = heroCards.length >= 6 ? "PLO6" : "PLO5";
+    let variant;
+    if (heroCards.length <= 2) variant = "NLHE";
+    else if (heroCards.length <= 4) variant = "PLO4";
+    else if (heroCards.length <= 5) variant = "PLO5";
+    else variant = "PLO6";
+
+    // Infer betFacing from button presence:
+    // If "fold" button visible → must be facing a bet (fold/call/raise situation)
+    // If no "fold" → check/bet situation (no bet to face)
+    const buttonLabels = buttons.map(
+      (b) => b.label || CLASS_NAMES_REV[b.classId] || "",
+    );
+    const hasFold = buttons.some((b) => b.classId === 52);
+    const hasCall = buttons.some((b) => b.classId === 53);
+    const betFacing = hasFold ? 1 : 0;
 
     return {
       heroCards,
@@ -763,7 +782,7 @@ class GameLoop extends EventEmitter {
       potOdds: 0.3, // Default — needs OCR integration
       spr: 5.0, // Default — needs stack/pot OCR
       inPosition: true, // Default — needs position detection
-      betFacing: 0,
+      betFacing,
       potSize: 100,
       stackSize: 500,
     };
@@ -794,7 +813,14 @@ class GameLoop extends EventEmitter {
       allin: [59],
     };
 
-    const targetClasses = ACTION_TO_CLASS[action] || [];
+    // Fallback chain: if preferred button not found, try alternatives
+    const FALLBACK_CHAIN = {
+      allin: ["raise", "call", "check"],
+      raise: ["call", "check"],
+      call: ["check"],
+      check: [],
+      fold: [],
+    };
 
     // Detection cx/cy/w/h are normalized [0, 1].
     // ADB expects Android pixel coordinates.
@@ -803,17 +829,28 @@ class GameLoop extends EventEmitter {
     const sw = screen.width || 1080;
     const sh = screen.height || 1920;
 
-    for (const classId of targetClasses) {
-      const btn = buttons.find((b) => b.classId === classId);
-      if (btn) {
-        const bw = Math.round(btn.w * sw);
-        const bh = Math.round(btn.h * sh);
-        return {
-          x: Math.round(btn.cx * sw - bw / 2),
-          y: Math.round(btn.cy * sh - bh / 2),
-          width: bw,
-          height: bh,
-        };
+    // Try primary action first, then fallbacks
+    const actionsToTry = [action, ...(FALLBACK_CHAIN[action] || [])];
+
+    for (const tryAction of actionsToTry) {
+      const targetClasses = ACTION_TO_CLASS[tryAction] || [];
+      for (const classId of targetClasses) {
+        const btn = buttons.find((b) => b.classId === classId);
+        if (btn) {
+          if (tryAction !== action) {
+            this._log.info(
+              `[GameLoop] Button fallback: ${action} → ${tryAction}`,
+            );
+          }
+          const bw = Math.round(btn.w * sw);
+          const bh = Math.round(btn.h * sh);
+          return {
+            x: Math.round(btn.cx * sw - bw / 2),
+            y: Math.round(btn.cy * sh - bh / 2),
+            width: bw,
+            height: bh,
+          };
+        }
       }
     }
 

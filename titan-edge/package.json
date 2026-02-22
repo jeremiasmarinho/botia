@@ -6,11 +6,15 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
+    "live": "cross-env NODE_ENV=development TITAN_LIVE_FIRE=1 electron .",
+    "live:shadow": "cross-env NODE_ENV=development TITAN_LIVE_FIRE=1 electron src/main/shadow-mode.js",
     "shadow": "electron src/main/shadow-mode.js",
     "shadow:dev": "cross-env NODE_ENV=development electron src/main/shadow-mode.js",
+    "prebuild:native": "cd ../titan-distributed/packages/core-engine && npm run build",
     "test": "vitest run",
     "test:adb": "node src/main/execution/__tests__/adb-bridge.test.js",
     "test:equity": "node src/main/brain/__tests__/equity-worker.test.js",
+    "test:native": "node -e \"const n=require('./native/titan-core.win32-x64-msvc.node');n.init();console.log(n.version());console.log('Equity:',n.equity([48,44,40,36,32],[50,44,38],5000))\"",
     "lint": "eslint src/ --ext .js,.ts",
     "build": "electron-builder"
   },
@@ -28,9 +32,10 @@
   "private": true,
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "^33.0.0",
+    "electron": "^33.4.11",
     "electron-builder": "^25.1.0",
     "eslint": "^9.0.0",
+    "pngjs": "^7.0.0",
     "vitest": "^2.0.0"
   },
   "dependencies": {

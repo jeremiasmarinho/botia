@@ -128,6 +128,9 @@ let lastFrameTime = 0;
 let confidenceThreshold = DEFAULT_CONFIDENCE;
 let iouThreshold = DEFAULT_IOU;
 
+// ADB frame queue for card detection (sent from main process)
+let adbFrameQueue = [];
+
 // Letterbox transform parameters (updated each frame)
 let letterboxScale = 1;
 let letterboxPadX = 0;
@@ -347,6 +350,23 @@ async function inferenceFrame(timestamp) {
       );
     }
 
+    // DEBUG: save frame to disk every 60 frames (via context bridge to main process)
+    if (currentFrame % 60 === 1) {
+      try {
+        const blob = await offscreenCanvas.convertToBlob({ type: "image/png" });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          window.inferenceAPI.sendDebugFrame({
+            frameId: currentFrame,
+            dataUrl: reader.result,
+          });
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) {
+        console.warn("[Inference] Could not save debug frame:", e.message);
+      }
+    }
+
     // 2. Preprocess: canvas → tensor → normalize [0,1] → batch dim
     inputTensor = tf.tidy(() => {
       const pixels = tf.browser.fromPixels(offscreenCanvas);
@@ -392,8 +412,114 @@ async function inferenceFrame(timestamp) {
     }
   }
 
+  // ── Process pending ADB crop frames (for card detection) ──────
+  while (adbFrameQueue.length > 0 && model) {
+    const adbFrame = adbFrameQueue.shift();
+    try {
+      await processAdbCrop(adbFrame);
+    } catch (e) {
+      console.error("[Inference] ADB crop error:", e);
+    }
+  }
+
   // Schedule next frame
   requestInferenceLoop();
+}
+
+// ── ADB Crop Processing (higher-res card detection) ─────────────────
+
+/**
+ * Process a cropped ADB screenshot for card detection.
+ * The main process sends a base64 PNG of a cropped region from
+ * the 1080×1920 ADB screenshot. This gives much higher resolution
+ * for cards than the desktopCapturer letterbox.
+ *
+ * @param {{ dataUrl: string, cropX: number, cropY: number, cropW: number, cropH: number, fullW: number, fullH: number, region: string }} data
+ */
+async function processAdbCrop(data) {
+  const t0 = performance.now();
+
+  // Load image from data URL
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+    img.src = data.dataUrl;
+  });
+
+  const vw = img.width;
+  const vh = img.height;
+
+  // Letterbox the crop into 640×640
+  const cropLetterboxScale = Math.min(
+    MODEL_INPUT_SIZE / vw,
+    MODEL_INPUT_SIZE / vh,
+  );
+  const newW = Math.round(vw * cropLetterboxScale);
+  const newH = Math.round(vh * cropLetterboxScale);
+  const padX = Math.round((MODEL_INPUT_SIZE - newW) / 2);
+  const padY = Math.round((MODEL_INPUT_SIZE - newH) / 2);
+
+  offscreenCtx.fillStyle = "rgb(114,114,114)";
+  offscreenCtx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+  offscreenCtx.drawImage(img, padX, padY, newW, newH);
+
+  console.log(
+    `[Inference] ADB crop (${data.region}): ${vw}×${vh} → ${newW}×${newH} + pad(${padX},${padY})`,
+  );
+
+  let inputTensor = null;
+  let rawOutput = null;
+
+  try {
+    inputTensor = tf.tidy(() => {
+      return tf.browser.fromPixels(offscreenCanvas).div(255.0).expandDims(0);
+    });
+
+    rawOutput = await model.predict(inputTensor);
+
+    // Pass crop dimensions directly to postProcess — no more global swap
+    const detections = await postProcess(rawOutput, {
+      srcW: vw,
+      srcH: vh,
+      scale: cropLetterboxScale,
+      padX,
+      padY,
+    });
+
+    const inferenceMs = Math.round((performance.now() - t0) * 10) / 10;
+
+    // Map detections from crop-normalized to full-frame-normalized coords
+    const mappedDetections = detections.map((d) => ({
+      ...d,
+      cx: (data.cropX + d.cx * data.cropW) / data.fullW,
+      cy: (data.cropY + d.cy * data.cropH) / data.fullH,
+      w: (d.w * data.cropW) / data.fullW,
+      h: (d.h * data.cropH) / data.fullH,
+      source: "adb-" + data.region,
+    }));
+
+    const cardCount = mappedDetections.filter((d) => d.classId <= 51).length;
+    console.log(
+      `[Inference] ADB ${data.region}: ${cardCount} cards, ${mappedDetections.length} total in ${inferenceMs}ms`,
+    );
+
+    // Always send result (even 0 cards) so main can clear stale detections.
+    // Add a synthetic source-only detection when empty so region is identifiable.
+    const toSend =
+      mappedDetections.length > 0
+        ? mappedDetections
+        : [{ classId: -1, source: "adb-" + data.region, _empty: true }];
+    sendDetections(toSend, inferenceMs, -1); // frameId -1 = ADB crop
+  } finally {
+    if (inputTensor && !inputTensor.isDisposed) inputTensor.dispose();
+    if (rawOutput) {
+      const outputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
+      for (const t of outputs) {
+        if (t && !t.isDisposed) t.dispose();
+      }
+    }
+  }
 }
 
 // ── Post-Processing (NMS) ───────────────────────────────────────────
@@ -408,9 +534,10 @@ async function inferenceFrame(timestamp) {
  *   - [4..65] = 62 class scores
  *
  * @param {tf.Tensor} rawOutput
+ * @param {{ srcW?: number, srcH?: number, scale?: number, padX?: number, padY?: number }} [opts]
  * @returns {Promise<Detection[]>}
  */
-async function postProcess(rawOutput) {
+async function postProcess(rawOutput, opts = {}) {
   const output = Array.isArray(rawOutput) ? rawOutput[0] : rawOutput;
 
   // Squeeze batch dim: [1, X, Y] → [X, Y]
@@ -434,9 +561,11 @@ async function postProcess(rawOutput) {
   const scores = [];
   const classIds = [];
 
-  // ── DEBUG: every 150 frames, dump ALL predictions above 0.10 ──
-  const debugFrame = frameId % 150 === 1;
+  // ── DEBUG: every 30 frames, dump ALL predictions above 0.10 ──
+  const debugFrame = frameId % 30 === 1;
   const debugHits = [];
+  // Extra debug: track best card-class predictions near hero area
+  const debugCardHits = [];
 
   for (let i = 0; i < data2d.length; i++) {
     const prediction = data2d[i];
@@ -467,6 +596,30 @@ async function postProcess(rawOutput) {
       });
     }
 
+    // Debug: find best card-class score for anchor boxes in hero region
+    // Model coords: hero cards should be at ~y=400-550, x=200-500
+    if (debugFrame && cy > 300 && cy < 600 && cx > 150 && cx < 500) {
+      let bestCardScore = 0;
+      let bestCardClass = 0;
+      for (let c = 4; c < 56; c++) {
+        // classes 0-51 are cards
+        if (prediction[c] > bestCardScore) {
+          bestCardScore = prediction[c];
+          bestCardClass = c - 4;
+        }
+      }
+      if (bestCardScore > 0.01) {
+        debugCardHits.push({
+          cls: CLASS_NAMES[bestCardClass] || `c${bestCardClass}`,
+          score: Math.round(bestCardScore * 1000) / 10,
+          allBest:
+            CLASS_NAMES[maxClass] + "=" + Math.round(maxScore * 100) + "%",
+          cx: Math.round(cx),
+          cy: Math.round(cy),
+        });
+      }
+    }
+
     if (maxScore < confidenceThreshold) continue;
 
     // Convert to normalized [y1, x1, y2, x2] for TF.js NMS
@@ -495,6 +648,25 @@ async function postProcess(rawOutput) {
     console.log(`[DEBUG] Frame #${frameId} — 0 predictions ≥10%`);
   }
 
+  // ── DEBUG: log card-class predictions in hero/board region ──
+  if (debugFrame && debugCardHits.length > 0) {
+    debugCardHits.sort((a, b) => b.score - a.score);
+    const topCards = debugCardHits.slice(0, 10);
+    console.log(
+      `[DEBUG-CARDS] Frame #${frameId} — ${debugCardHits.length} card predictions ≥1% in hero region:\n` +
+        topCards
+          .map(
+            (h) =>
+              `  card:${h.cls}=${h.score}% (overall:${h.allBest}) @(${h.cx},${h.cy})`,
+          )
+          .join("\n"),
+    );
+  } else if (debugFrame) {
+    console.log(
+      `[DEBUG-CARDS] Frame #${frameId} — 0 card predictions ≥1% in hero region`,
+    );
+  }
+
   if (boxes.length === 0) return [];
 
   // Apply class-aware NMS
@@ -516,20 +688,19 @@ async function postProcess(rawOutput) {
   nmsIndices.dispose();
 
   // Build final detection array — reverse letterbox transform
-  const origW = videoEl ? videoEl.videoWidth : MODEL_INPUT_SIZE;
-  const origH = videoEl ? videoEl.videoHeight : MODEL_INPUT_SIZE;
+  const origW = opts.srcW || (videoEl ? videoEl.videoWidth : MODEL_INPUT_SIZE);
+  const origH = opts.srcH || (videoEl ? videoEl.videoHeight : MODEL_INPUT_SIZE);
+  const lbScale = opts.scale != null ? opts.scale : letterboxScale;
+  const lbPadX = opts.padX != null ? opts.padX : letterboxPadX;
+  const lbPadY = opts.padY != null ? opts.padY : letterboxPadY;
 
   return selectedIndices.map((idx) => {
     const [y1, x1, y2, x2] = boxes[idx];
     // Convert normalized model coords → model pixels → remove pad → unscale → normalize to original image
-    const ox1 =
-      (x1 * MODEL_INPUT_SIZE - letterboxPadX) / letterboxScale / origW;
-    const oy1 =
-      (y1 * MODEL_INPUT_SIZE - letterboxPadY) / letterboxScale / origH;
-    const ox2 =
-      (x2 * MODEL_INPUT_SIZE - letterboxPadX) / letterboxScale / origW;
-    const oy2 =
-      (y2 * MODEL_INPUT_SIZE - letterboxPadY) / letterboxScale / origH;
+    const ox1 = (x1 * MODEL_INPUT_SIZE - lbPadX) / lbScale / origW;
+    const oy1 = (y1 * MODEL_INPUT_SIZE - lbPadY) / lbScale / origH;
+    const ox2 = (x2 * MODEL_INPUT_SIZE - lbPadX) / lbScale / origW;
+    const oy2 = (y2 * MODEL_INPUT_SIZE - lbPadY) / lbScale / origH;
 
     return {
       classId: classIds[idx],
@@ -557,11 +728,12 @@ function classifyDetections(detections) {
   const buttons = [];
 
   for (const d of detections) {
-    if (d.classId <= 51) {
+    if (d.classId >= 0 && d.classId <= 51) {
       cards.push(d.label);
-    } else {
+    } else if (d.classId >= 52) {
       buttons.push(d.label);
     }
+    // classId < 0 = synthetic markers, skip
   }
 
   return { cards, buttons, raw: detections };
@@ -628,6 +800,15 @@ window.inferenceAPI.onConfig((config) => {
     console.log(
       `[Inference] FPS → ${config.fps} (interval=${fpsInterval.toFixed(1)}ms)`,
     );
+  }
+});
+
+// ── ADB Frame Listener ─────────────────────────────────────────────
+window.inferenceAPI.onAdbFrame((data) => {
+  // Queue the ADB frame for processing in the next inference cycle
+  // Keep max 4 in queue to prevent backup
+  if (adbFrameQueue.length < 4) {
+    adbFrameQueue.push(data);
   }
 });
 

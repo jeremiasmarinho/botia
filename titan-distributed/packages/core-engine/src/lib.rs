@@ -38,10 +38,15 @@ use serde::{Deserialize, Serialize};
 
 /// Input parameters for the solver, received from Node.js.
 /// NAPI-RS + serde handles automatic V8 Object → Rust Struct conversion.
+///
+/// Field aliases allow both naming conventions:
+///   - Cloud uses: format, num_players, position
+///   - Edge uses:  game_variant, num_opponents
 #[derive(Debug, Deserialize)]
 #[napi(object)]
 pub struct SolveParams {
-    /// 0 = PLO5, 1 = PLO6, 2 = NLH
+    /// 0 = PLO5, 1 = PLO6, 2 = NLH  (alias: game_variant)
+    #[serde(alias = "game_variant")]
     pub format: u32,
     /// 0 = Preflop, 1 = Flop, 2 = Turn, 3 = River
     pub street: u32,
@@ -50,16 +55,20 @@ pub struct SolveParams {
     /// Board cards as card IDs (0-51)
     pub board_cards: Vec<u8>,
     /// Known dead/folded cards
+    #[serde(default)]
     pub dead_cards: Vec<u8>,
     /// Pot size in BB×100 (fixed-point)
     pub pot_bb100: u32,
     /// Hero stack in BB×100
     pub hero_stack: u32,
     /// Villain stacks in BB×100
+    #[serde(default)]
     pub villain_stacks: Vec<u32>,
     /// Hero position (0=BTN, 1=SB, 2=BB, 3=UTG, 4=MP, 5=CO)
+    #[serde(default)]
     pub position: u32,
-    /// Number of players remaining
+    /// Number of players remaining (alias: num_opponents — adds 1 internally)
+    #[serde(alias = "num_opponents")]
     pub num_players: u32,
 }
 

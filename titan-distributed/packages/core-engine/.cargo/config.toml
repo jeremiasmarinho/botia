@@ -1,0 +1,10 @@
+# .cargo/config.toml — Rust build configuration for titan-core-engine
+#
+# target-cpu=native enables AVX2/SSE4.2 on the local machine,
+# which benefits the Monte Carlo inner loop significantly (~15-20% faster).
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]

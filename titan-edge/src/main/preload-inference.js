@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("inferenceAPI", {
   sendDetections: (payload) => ipcRenderer.send(IPC.VISION_DETECTIONS, payload),
   sendStatus: (status) => ipcRenderer.send(IPC.VISION_STATUS, status),
   sendError: (err) => ipcRenderer.send(IPC.VISION_ERROR, err),
+  sendDebugFrame: (payload) =>
+    ipcRenderer.send("vision:save-debug-frame", payload),
 
   // ── Inbound (main → inference) ──────────────────────────────────
   onStart: (callback) =>
@@ -33,4 +35,6 @@ contextBridge.exposeInMainWorld("inferenceAPI", {
   onStop: (callback) => ipcRenderer.on(IPC.VISION_STOP, () => callback()),
   onConfig: (callback) =>
     ipcRenderer.on(IPC.VISION_CONFIG, (_e, config) => callback(config)),
+  onAdbFrame: (callback) =>
+    ipcRenderer.on("vision:adb-frame", (_e, data) => callback(data)),
 });

@@ -18,8 +18,8 @@
 //! using Counterfactual Regret Minimization. The lookup is O(1) — just
 //! a forward pass through the network (~0.3ms).
 
-use crate::lib::SolveParams;
-use crate::lib::SolveResult;
+use crate::SolveParams;
+use crate::SolveResult;
 use crate::omaha;
 use crate::evaluator;
 

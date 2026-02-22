@@ -80,6 +80,14 @@ let lastVisionResult = null;
 /** Stored LDPlayer source ID for resumeVision (prevents sourceId: undefined crash) */
 let activeLdSourceId = null;
 
+// ── Chromium flags (MUST be set before app.whenReady) ───────────────
+// Disable WGC (Windows Graphics Capture) — LDPlayer's DirectX renderer
+// is incompatible with WGC, causing ProcessFrame -2147467259 errors.
+// Fall back to DXGI Desktop Duplication / BitBlt which works reliably.
+app.commandLine.appendSwitch("disable-features", "WgcCapturerWin");
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
+app.commandLine.appendSwitch("disable-gpu-sandbox");
+
 // ── App Lifecycle ───────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
@@ -188,6 +196,13 @@ function createInferenceWindow() {
     restartInferenceWindow();
   });
 
+  // Forward renderer console to main log for diagnostics
+  win.webContents.on("console-message", (_event, level, message) => {
+    if (message.includes("[Inference]") || message.includes("[DEBUG]")) {
+      log.info(`[R] ${message}`);
+    }
+  });
+
   return win;
 }
 
@@ -260,6 +275,98 @@ async function initOpponentDb() {
     log.info(`[DB] Opponent database ready: ${dbPath}`);
   } catch (err) {
     log.error(`[DB] Init failed: ${err.message}`);
+  }
+}
+
+// ── ADB Card Scanner ───────────────────────────────────────────────
+// The desktopCapturer gives us a 600×1012 LDPlayer window which
+// letterboxes to 379×640 in the 640×640 model. Cards end up ~28px
+// wide — too small for YOLO. ADB screenshots give native 1080×1920,
+// so we crop card regions and send them to the inference renderer
+// for a second YOLO pass, giving cards ~88px — easily detectable.
+
+let adbScanTimer = null;
+
+/**
+ * Crop regions from the ADB screenshot for card detection.
+ * Each crop is sent to the inference renderer for YOLO inference.
+ */
+const ADB_CROP_REGIONS = [
+  // Hero cards — bottom center of screen
+  { name: "hero", x: 250, y: 1350, w: 580, h: 400 },
+  // Community cards (flop/turn/river) — center of table
+  { name: "board", x: 150, y: 600, w: 780, h: 350 },
+];
+
+function startAdbCardScanner() {
+  if (adbScanTimer) return; // Already running
+  if (!adb?.connected) {
+    log.warn("[ADB-Vision] Cannot start card scanner — ADB not connected");
+    return;
+  }
+
+  const PNG = require("pngjs").PNG;
+  const SCAN_INTERVAL = 600; // ms — ADB screencap takes ~300ms
+
+  log.info(
+    `[ADB-Vision] Starting card scanner (${ADB_CROP_REGIONS.length} regions @ ${SCAN_INTERVAL}ms)`,
+  );
+
+  let scanning = false;
+
+  adbScanTimer = setInterval(async () => {
+    if (scanning) return; // Skip if previous scan is still running
+    if (!inferenceWindow || inferenceWindow.isDestroyed()) return;
+
+    scanning = true;
+    try {
+      // Take ADB screenshot (native 1080×1920)
+      const raw = await adb.screenshot();
+      const img = PNG.sync.read(raw);
+
+      // Process each crop region
+      for (const region of ADB_CROP_REGIONS) {
+        const { name, x, y, w, h } = region;
+
+        // Bounds check
+        if (x + w > img.width || y + h > img.height) continue;
+
+        // Create cropped PNG
+        const crop = new PNG({ width: w, height: h });
+        for (let row = 0; row < h; row++) {
+          const srcOff = ((y + row) * img.width + x) * 4;
+          const dstOff = row * w * 4;
+          img.data.copy(crop.data, dstOff, srcOff, srcOff + w * 4);
+        }
+
+        // Encode and send to inference renderer
+        const cropPng = PNG.sync.write(crop);
+        const base64 = cropPng.toString("base64");
+
+        inferenceWindow.webContents.send("vision:adb-frame", {
+          dataUrl: `data:image/png;base64,${base64}`,
+          cropX: x,
+          cropY: y,
+          cropW: w,
+          cropH: h,
+          fullW: img.width,
+          fullH: img.height,
+          region: name,
+        });
+      }
+    } catch (e) {
+      // Silently ignore — ADB errors are transient
+    } finally {
+      scanning = false;
+    }
+  }, SCAN_INTERVAL);
+}
+
+function stopAdbCardScanner() {
+  if (adbScanTimer) {
+    clearInterval(adbScanTimer);
+    adbScanTimer = null;
+    log.info("[ADB-Vision] Card scanner stopped");
   }
 }
 
@@ -422,24 +529,90 @@ function registerIpcHandlers() {
     },
   );
 
-  // ── Vision: Detections from inference window ──────────────────
-  ipcMain.on(IPC.VISION_DETECTIONS, (_event, payload) => {
-    lastVisionResult = payload;
+  // ── Vision: Save debug frame to disk ──────────────────────────
+  ipcMain.on("vision:save-debug-frame", (_event, { frameId, dataUrl }) => {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const debugDir = path.join(app.getPath("userData"), "debug_frames");
+      if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+      const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+      const filePath = path.join(debugDir, `frame_${frameId}.png`);
+      fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+      log.info(`[DEBUG] Saved frame #${frameId} → ${filePath}`);
+    } catch (e) {
+      log.warn(`[DEBUG] Failed to save frame: ${e.message}`);
+    }
+  });
 
+  // ── Vision: Detections from inference window ──────────────────
+  // Two sources arrive here:
+  //   1. Regular desktopCapturer frames (frameId > 0) — detects buttons
+  //   2. ADB crop frames (frameId === -1) — detects cards at higher resolution
+  // We merge ADB card detections into the latest regular frame.
+  // Hero and board crops are tracked separately to avoid overwriting each other.
+
+  const lastAdbCardsByRegion = {}; // { "hero": [...cards], "board": [...cards] }
+
+  ipcMain.on(IPC.VISION_DETECTIONS, (_event, payload) => {
     const detections = payload.detections || [];
-    const cardCount = detections.filter((d) => d.classId <= 51).length;
-    const buttonCount = detections.filter((d) => d.classId >= 52 && d.classId <= 61).length;
     const { inferenceMs, frameId: fid } = payload;
-    log.debug(
-      `[Vision] Frame #${fid}: ${cardCount} cards, ${buttonCount} buttons (${inferenceMs}ms)`,
+
+    if (fid === -1) {
+      // ADB crop result — extract only card detections, keyed by region
+      const adbCards = detections.filter(
+        (d) => d.classId >= 0 && d.classId <= 51,
+      );
+      // Determine region from source field (e.g., "adb-hero" → "hero")
+      const region =
+        (detections[0]?.source || "").replace("adb-", "") || "unknown";
+      // Always update region — even with 0 cards to clear stale detections.
+      // The game loop's 3-frame stability check prevents flickering issues.
+      lastAdbCardsByRegion[region] = adbCards;
+      // Log all detected cards across regions
+      const allAdbCards = Object.values(lastAdbCardsByRegion).flat();
+      if (adbCards.length > 0) {
+        log.info(
+          `[ADB-Vision] ${adbCards.length} cards detected (${region}): ${adbCards.map((c) => c.label).join(", ")}`,
+        );
+      }
+      return; // Don't forward ADB-only frames to game loop directly
+    }
+
+    // Regular frame — merge with ALL ADB card detections (hero + board)
+    const regularCards = detections.filter((d) => d.classId <= 51);
+    const buttons = detections.filter(
+      (d) => d.classId >= 52 && d.classId <= 61,
+    );
+
+    // Merge all ADB regions together
+    const allAdbCards = Object.values(lastAdbCardsByRegion).flat();
+
+    // Use ADB cards if regular detection found none
+    const mergedCards = regularCards.length > 0 ? regularCards : allAdbCards;
+    const mergedDetections = [...mergedCards, ...buttons];
+
+    const cardCount = mergedCards.length;
+    const buttonCount = buttons.length;
+
+    // Update the payload with merged detections
+    const mergedPayload = {
+      ...payload,
+      detections: mergedDetections,
+    };
+
+    lastVisionResult = mergedPayload;
+
+    log.info(
+      `[Vision] Frame #${fid}: ${cardCount} cards${allAdbCards.length > 0 && regularCards.length === 0 ? " (ADB)" : ""}, ${buttonCount} buttons (${inferenceMs}ms)`,
     );
 
     // Forward detection summary to dashboard
-    mainWindow?.webContents.send(IPC.VISION_DETECTIONS, payload);
+    mainWindow?.webContents.send(IPC.VISION_DETECTIONS, mergedPayload);
 
     // ── Feed into Game Loop (the SOLE consumer of vision data) ──
     if (gameLoop?.running) {
-      gameLoop.onVisionFrame(payload);
+      gameLoop.onVisionFrame(mergedPayload);
     }
   });
 
@@ -473,6 +646,9 @@ function registerIpcHandlers() {
           fps: 5,
         });
         log.info(`[Vision] Capture started @ 5 FPS`);
+
+        // Start ADB-based card scanner for high-resolution card detection
+        startAdbCardScanner();
 
         // Auto-start GameLoop now that vision is flowing
         if (gameLoop && !gameLoop.running && adb?.connected) {
@@ -626,6 +802,7 @@ function logSystemSummary() {
 
 async function shutdown() {
   try {
+    stopAdbCardScanner();
     if (gameLoop) gameLoop.stop();
     if (solver) await solver.shutdown();
     if (opponentDb) opponentDb.close();

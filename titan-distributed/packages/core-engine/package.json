@@ -16,11 +16,15 @@
     }
   },
   "scripts": {
-    "build": "napi build --release",
-    "build:debug": "napi build",
-    "test": "cargo test"
+    "build": "napi build --release --platform",
+    "build:debug": "napi build --platform",
+    "build:win": "napi build --release --platform --target x86_64-pc-windows-msvc",
+    "test": "cargo test",
+    "bench": "cargo bench",
+    "clean": "cargo clean && rimraf *.node"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.0"
+    "@napi-rs/cli": "^2.18.0",
+    "rimraf": "^5.0.0"
   }
 }

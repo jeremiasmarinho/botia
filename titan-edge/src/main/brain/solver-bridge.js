@@ -1,8 +1,9 @@
 /**
  * Solver Bridge — Rust N-API Native Addon Interface (Zero-Copy)
  *
- * Replaces the JS Worker Thread EquityPool (~173ms PLO5 / 192ms PLO6)
- * with direct calls into the Rust titan_core.node addon via N-API.
+ * LOCAL LIVE-FIRE MODE: Loads the compiled titan_core.node directly
+ * from the local build, bypassing any cloud/gRPC calls entirely.
+ * The Rust engine runs in-process with the Electron main thread.
  *
  * Performance Target: <3ms per equity call (vs 173ms JS baseline).
  *
@@ -98,39 +99,76 @@ function cardToId(card) {
 }
 
 /**
- * Encode an array of card strings into a Uint8Array (zero-copy ready).
+ * Encode an array of card strings into a plain Array of card IDs.
+ * N-API Vec<u8> expects a regular JS Array, not Uint8Array.
  * @param {string[]} cards
- * @returns {Uint8Array}
+ * @returns {number[]}
  */
 function encodeCards(cards) {
-  const buf = new Uint8Array(cards.length);
+  const buf = new Array(cards.length);
   for (let i = 0; i < cards.length; i++) {
     buf[i] = cardToId(cards[i]);
   }
   return buf;
 }
 
+/**
+ * Ensure a value is a plain Array (convert Uint8Array/TypedArray if needed).
+ * N-API Vec<u8> requires a JS Array, not a TypedArray.
+ * @param {number[]|Uint8Array} arr
+ * @returns {number[]}
+ */
+function toNapiArray(arr) {
+  if (Array.isArray(arr)) return arr;
+  return Array.from(arr);
+}
+
 // ── Native Addon Loader ─────────────────────────────────────────────
 
 /**
  * Search multiple paths for the compiled Rust addon.
+ * Prioritizes the local napi-rs build output (titan-core.win32-x64-msvc.node)
+ * then falls back to generic titan_core.node filenames.
+ *
+ * napi-rs v2 outputs platform-specific filenames when built with --platform:
+ *   titan-core.win32-x64-msvc.node   (Windows x64)
+ *   titan-core.linux-x64-gnu.node    (Linux x64)
+ *   titan-core.darwin-x64.node       (macOS x64)
+ *   titan-core.darwin-arm64.node     (macOS ARM)
+ *
  * @returns {object|null}
  */
 function loadNativeAddon() {
+  // Platform-specific napi-rs output filename
+  const PLATFORM_MAP = {
+    "win32-x64": "titan-core.win32-x64-msvc.node",
+    "linux-x64": "titan-core.linux-x64-gnu.node",
+    "darwin-x64": "titan-core.darwin-x64.node",
+    "darwin-arm64": "titan-core.darwin-arm64.node",
+  };
+  const platformKey = `${process.platform}-${process.arch}`;
+  const platformFile = PLATFORM_MAP[platformKey] || "titan-core.node";
+
+  // Core-engine root (relative to this file in titan-edge/src/main/brain/)
+  const coreEngineRoot = path.resolve(
+    __dirname,
+    "../../../../titan-distributed/packages/core-engine",
+  );
+
   const searchPaths = [
-    // Local build in titan-edge
+    // 1. napi-rs --platform build output (preferred — platform-specific)
+    path.join(coreEngineRoot, platformFile),
+    // 2. Generic .node in core-engine root (napi build without --platform)
+    path.join(coreEngineRoot, "titan_core.node"),
+    path.join(coreEngineRoot, "titan-core.node"),
+    // 3. Cargo release output directory
+    path.join(coreEngineRoot, "target", "release", "titan_core.node"),
+    // 4. Local native/ folder in titan-edge (pre-copied binary)
+    path.resolve(__dirname, "../../../native", platformFile),
     path.resolve(__dirname, "../../../native/titan_core.node"),
+    // 5. Local build/Release (node-gyp fallback)
     path.resolve(__dirname, "../../../build/Release/titan_core.node"),
-    // Distributed monorepo build
-    path.resolve(
-      __dirname,
-      "../../../../titan-distributed/packages/core-engine/native/titan_core.node",
-    ),
-    path.resolve(
-      __dirname,
-      "../../../../titan-distributed/packages/core-engine/target/release/titan_core.node",
-    ),
-    // npm pre-built binary
+    // 6. npm installed package (future — pre-built binary distribution)
     "titan-core-engine",
   ];
 
@@ -141,15 +179,23 @@ function loadNativeAddon() {
         typeof addon.solve === "function" ||
         typeof addon.equity === "function"
       ) {
-        log.info(`[SolverBridge] Rust addon loaded: ${p}`);
+        log.info(`[SolverBridge] ✓ Rust addon loaded from: ${p}`);
+        log.info(`[SolverBridge]   Platform: ${platformKey} (${platformFile})`);
         return addon;
       }
-    } catch {
-      // Continue searching
+    } catch (err) {
+      log.debug(`[SolverBridge] ✗ ${p}: ${err.code || err.message}`);
     }
   }
 
-  log.warn("[SolverBridge] Rust addon not found — JS fallback active (SLOW)");
+  log.warn("[SolverBridge] Rust addon not found in any search path:");
+  for (const p of searchPaths) {
+    log.warn(`  → ${p}`);
+  }
+  log.warn("[SolverBridge] JS fallback active (SLOW — 50x slower)");
+  log.warn(
+    "[SolverBridge] Build with: cd titan-distributed/packages/core-engine && npm run build",
+  );
   return null;
 }
 
@@ -313,7 +359,7 @@ class SolverBridge extends EventEmitter {
     const variant =
       gameVariant ?? (hero.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
 
-    // Encode cards to Uint8Array (zero-copy into Rust)
+    // Encode cards to plain Array (N-API Vec<u8> needs Array, not TypedArray)
     const heroBuf = encodeCards(hero);
     const boardBuf = encodeCards(board);
     const deadBuf = encodeCards(dead);
@@ -322,17 +368,12 @@ class SolverBridge extends EventEmitter {
     let result;
 
     if (this._useNative && typeof this._native.equity === "function") {
-      // ── ZERO-COPY N-API CALL ──────────────────────────────────
-      // Rust signature: fn equity(hero: &[u8], board: &[u8], dead: &[u8],
-      //                           sims: u32, opponents: u8, variant: u8) -> EquityResult
-      result = this._native.equity(
-        heroBuf,
-        boardBuf,
-        deadBuf,
-        sims,
-        opponents,
-        variant,
-      );
+      // ── N-API CALL ────────────────────────────────────────────
+      // Rust signature: fn equity(hero_cards: Vec<u8>, board_cards: Vec<u8>, sims: u32) -> f64
+      // Returns a plain f64 equity in [0, 1]. We wrap it into {wins, ties, runs}
+      // so downstream code works identically for both engines.
+      const eq = this._native.equity(heroBuf, boardBuf, sims);
+      result = { wins: Math.round(eq * sims), ties: 0, runs: sims };
     } else {
       // Fallback
       const eq = this._fallback.equity(
@@ -400,7 +441,7 @@ class SolverBridge extends EventEmitter {
       gameVariant ??
       (heroCards.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
 
-    // Encode to Uint8Array
+    // Encode to plain Array (N-API Vec<u8> needs Array)
     const heroBuf = encodeCards(heroCards);
     const boardBuf = encodeCards(boardCards);
     const deadBuf = encodeCards(deadCards);
@@ -411,17 +452,19 @@ class SolverBridge extends EventEmitter {
     let raw;
 
     if (this._useNative) {
-      // ── ZERO-COPY N-API CALL ──────────────────────────────────
+      // ── N-API CALL ────────────────────────────────────────────
+      // napi-rs #[napi(object)] auto-converts Rust snake_case → JS camelCase
       raw = this._native.solve({
-        game_variant: variant,
+        format: variant,
         street: streetInt,
-        hero_cards: heroBuf,
-        board_cards: boardBuf,
-        dead_cards: deadBuf,
-        pot_bb100: potBb100,
-        hero_stack: heroStack,
-        villain_stacks: new Uint32Array(villainStacks),
-        num_opponents: opponents,
+        heroCards: heroBuf,
+        boardCards: boardBuf,
+        deadCards: deadBuf,
+        potBb100: potBb100,
+        heroStack: heroStack,
+        villainStacks: Array.from(villainStacks),
+        position: 0, // Default BTN — needs position detection integration
+        numPlayers: opponents,
       });
     } else {
       raw = this._fallback.solve({
@@ -439,21 +482,24 @@ class SolverBridge extends EventEmitter {
     const elapsedUs = Math.round((performance.now() - t0) * 1000);
     this._trackPerf(elapsedUs);
 
+    // napi-rs returns camelCase field names from Rust SolveResult
+    const isNative = this._useNative;
     return {
       action: ACTION_NAMES[raw.action] ?? "fold",
-      raiseAmount: raw.raise_amount_bb100 || 0,
+      raiseAmount:
+        (isNative ? raw.raiseAmountBb100 : raw.raise_amount_bb100) || 0,
       equity: raw.equity || 0,
-      ev: raw.ev_bb100 || 0,
+      ev: (isNative ? raw.evBb100 : raw.ev_bb100) || 0,
       frequencies: {
-        fold: raw.freq_fold || 0,
-        check: raw.freq_check || 0,
-        call: raw.freq_call || 0,
-        raise: raw.freq_raise || 0,
-        allin: raw.freq_allin || 0,
+        fold: (isNative ? raw.freqFold : raw.freq_fold) || 0,
+        check: (isNative ? raw.freqCheck : raw.freq_check) || 0,
+        call: (isNative ? raw.freqCall : raw.freq_call) || 0,
+        raise: (isNative ? raw.freqRaise : raw.freq_raise) || 0,
+        allin: (isNative ? raw.freqAllin : raw.freq_allin) || 0,
       },
       confidence: raw.confidence || 0,
       elapsedUs,
-      engine: this._useNative ? "rust-cfr" : "js-fallback",
+      engine: isNative ? "rust-cfr" : "js-fallback",
     };
   }
 
@@ -494,23 +540,18 @@ class SolverBridge extends EventEmitter {
       (heroIds.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
     const actualSims = sims ?? (heroIds.length >= 6 ? 3000 : 5000);
 
-    // Direct Uint8Array from classId integers — NO string conversion
-    const heroBuf = new Uint8Array(heroIds);
-    const boardBuf = new Uint8Array(boardIds);
-    const deadBuf = new Uint8Array(deadIds);
+    // Plain Array from classId integers — N-API Vec<u8> requires Array, not TypedArray
+    const heroBuf = Array.from(heroIds);
+    const boardBuf = Array.from(boardIds);
+    const deadBuf = Array.from(deadIds);
 
     const t0 = performance.now();
     let result;
 
     if (this._useNative && typeof this._native.equity === "function") {
-      result = this._native.equity(
-        heroBuf,
-        boardBuf,
-        deadBuf,
-        actualSims,
-        opponents,
-        variant,
-      );
+      // Rust: fn equity(hero_cards: Vec<u8>, board_cards: Vec<u8>, sims: u32) -> f64
+      const eq = this._native.equity(heroBuf, boardBuf, actualSims);
+      result = { wins: Math.round(eq * actualSims), ties: 0, runs: actualSims };
     } else {
       const eq = this._fallback.equity(
         heroBuf,
@@ -580,10 +621,10 @@ class SolverBridge extends EventEmitter {
       gameVariant ??
       (heroIds.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
 
-    // Direct Uint8Array — zero-copy into Rust N-API
-    const heroBuf = new Uint8Array(heroIds);
-    const boardBuf = new Uint8Array(boardIds);
-    const deadBuf = new Uint8Array(deadIds);
+    // Plain Array from classId integers — N-API Vec<u8> requires Array, not TypedArray
+    const heroBuf = Array.from(heroIds);
+    const boardBuf = Array.from(boardIds);
+    const deadBuf = Array.from(deadIds);
 
     const streetInt = STREET[street.toUpperCase()] ?? STREET.FLOP;
 
@@ -591,16 +632,18 @@ class SolverBridge extends EventEmitter {
     let raw;
 
     if (this._useNative) {
+      // napi-rs #[napi(object)] auto-converts Rust snake_case → JS camelCase
       raw = this._native.solve({
-        game_variant: variant,
+        format: variant,
         street: streetInt,
-        hero_cards: heroBuf,
-        board_cards: boardBuf,
-        dead_cards: deadBuf,
-        pot_bb100: potBb100,
-        hero_stack: heroStack,
-        villain_stacks: new Uint32Array(villainStacks),
-        num_opponents: opponents,
+        heroCards: heroBuf,
+        boardCards: boardBuf,
+        deadCards: deadBuf,
+        potBb100: potBb100,
+        heroStack: heroStack,
+        villainStacks: Array.from(villainStacks),
+        position: 0, // Default BTN — needs position detection integration
+        numPlayers: opponents,
       });
     } else {
       raw = this._fallback.solve({
@@ -618,21 +661,24 @@ class SolverBridge extends EventEmitter {
     const elapsedUs = Math.round((performance.now() - t0) * 1000);
     this._trackPerf(elapsedUs);
 
+    // napi-rs returns camelCase field names from Rust SolveResult
+    const isNative = this._useNative;
     return {
       action: ACTION_NAMES[raw.action] ?? "fold",
-      raiseAmount: raw.raise_amount_bb100 || 0,
+      raiseAmount:
+        (isNative ? raw.raiseAmountBb100 : raw.raise_amount_bb100) || 0,
       equity: raw.equity || 0,
-      ev: raw.ev_bb100 || 0,
+      ev: (isNative ? raw.evBb100 : raw.ev_bb100) || 0,
       frequencies: {
-        fold: raw.freq_fold || 0,
-        check: raw.freq_check || 0,
-        call: raw.freq_call || 0,
-        raise: raw.freq_raise || 0,
-        allin: raw.freq_allin || 0,
+        fold: (isNative ? raw.freqFold : raw.freq_fold) || 0,
+        check: (isNative ? raw.freqCheck : raw.freq_check) || 0,
+        call: (isNative ? raw.freqCall : raw.freq_call) || 0,
+        raise: (isNative ? raw.freqRaise : raw.freq_raise) || 0,
+        allin: (isNative ? raw.freqAllin : raw.freq_allin) || 0,
       },
       confidence: raw.confidence || 0,
       elapsedUs,
-      engine: this._useNative ? "rust-cfr" : "js-fallback",
+      engine: isNative ? "rust-cfr" : "js-fallback",
     };
   }
 

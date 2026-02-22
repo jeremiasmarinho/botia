@@ -1,0 +1,10 @@
+F:\botia\titan-distributed\packages\core-engine\target\release\deps\napi_build-ce4be064b0ec2606.d: C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\lib.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\android.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\wasi.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\windows.rs
+
+F:\botia\titan-distributed\packages\core-engine\target\release\deps\libnapi_build-ce4be064b0ec2606.rlib: C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\lib.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\android.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\wasi.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\windows.rs
+
+F:\botia\titan-distributed\packages\core-engine\target\release\deps\libnapi_build-ce4be064b0ec2606.rmeta: C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\lib.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\android.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\wasi.rs C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\windows.rs
+
+C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\lib.rs:
+C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\android.rs:
+C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\wasi.rs:
+C:\Users\Jeremias\ Marinho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\napi-build-2.3.1\src\windows.rs:
