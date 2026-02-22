@@ -457,6 +457,185 @@ class SolverBridge extends EventEmitter {
     };
   }
 
+  // ── Zero-Copy ClassId API (GameLoop integration) ─────────────
+
+  /**
+   * Calculate equity directly from YOLO classId arrays (zero-copy).
+   *
+   * YOLO classIds 0-51 use the same encoding as the Rust solver:
+   *   id = rank * 4 + suit  (rank: 0=2..12=A, suit: 0=c,1=d,2=h,3=s)
+   *
+   * This skips the string→int card encoding entirely, shaving ~0.1ms
+   * per call and eliminating an entire class of encoding bugs.
+   *
+   * @param {Object} params
+   * @param {number[]} params.heroIds     - Hero classIds (e.g. [50, 45, 36, 8, 0])
+   * @param {number[]} params.boardIds    - Board classIds (0-5 cards)
+   * @param {number[]} [params.deadIds=[]]
+   * @param {number}   [params.sims]
+   * @param {number}   [params.opponents=1]
+   * @param {number}   [params.gameVariant]
+   * @returns {{ equity: number, winRate: number, tieRate: number, sims: number, elapsedUs: number, engine: string }}
+   */
+  equityFromIds(params) {
+    this._assertReady();
+
+    const {
+      heroIds,
+      boardIds = [],
+      deadIds = [],
+      sims,
+      opponents = 1,
+      gameVariant,
+    } = params;
+
+    const variant =
+      gameVariant ??
+      (heroIds.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
+    const actualSims = sims ?? (heroIds.length >= 6 ? 3000 : 5000);
+
+    // Direct Uint8Array from classId integers — NO string conversion
+    const heroBuf = new Uint8Array(heroIds);
+    const boardBuf = new Uint8Array(boardIds);
+    const deadBuf = new Uint8Array(deadIds);
+
+    const t0 = performance.now();
+    let result;
+
+    if (this._useNative && typeof this._native.equity === "function") {
+      result = this._native.equity(
+        heroBuf,
+        boardBuf,
+        deadBuf,
+        actualSims,
+        opponents,
+        variant,
+      );
+    } else {
+      const eq = this._fallback.equity(
+        heroBuf,
+        boardBuf,
+        deadBuf,
+        actualSims,
+        opponents,
+        variant,
+      );
+      result = { wins: Math.round(eq * actualSims), ties: 0, runs: actualSims };
+    }
+
+    const elapsedUs = Math.round((performance.now() - t0) * 1000);
+    this._trackPerf(elapsedUs);
+
+    const totalRuns = result.runs || actualSims;
+    const wins = result.wins || 0;
+    const ties = result.ties || 0;
+
+    return {
+      equity: totalRuns > 0 ? (wins + ties * 0.5) / totalRuns : 0,
+      winRate: totalRuns > 0 ? wins / totalRuns : 0,
+      tieRate: totalRuns > 0 ? ties / totalRuns : 0,
+      sims: totalRuns,
+      elapsedUs,
+      engine: this._useNative ? "rust" : "js-fallback",
+    };
+  }
+
+  /**
+   * Full GTO solve from YOLO classId arrays (zero-copy).
+   *
+   * Primary integration point for GameLoop: accepts classId integers
+   * from vision detections, returns the ideal action string.
+   *
+   * @param {Object} params
+   * @param {number[]}  params.heroIds       - Hero classIds
+   * @param {number[]}  params.boardIds      - Board classIds
+   * @param {number[]}  [params.deadIds=[]]
+   * @param {string}    params.street        - 'preflop'|'flop'|'turn'|'river'
+   * @param {number}    params.potBb100      - Pot in BB×100
+   * @param {number}    params.heroStack     - Hero stack in BB×100
+   * @param {number[]}  [params.villainStacks=[]]
+   * @param {number}    [params.opponents=1]
+   * @param {number}    [params.gameVariant]
+   *
+   * @returns {{ action: string, raiseAmount: number, equity: number,
+   *             ev: number, frequencies: Object, confidence: number,
+   *             elapsedUs: number, engine: string }}
+   */
+  solveFromIds(params) {
+    this._assertReady();
+
+    const {
+      heroIds,
+      boardIds = [],
+      deadIds = [],
+      street = "flop",
+      potBb100 = 100,
+      heroStack = 200,
+      villainStacks = [],
+      opponents = 1,
+      gameVariant,
+    } = params;
+
+    const variant =
+      gameVariant ??
+      (heroIds.length >= 6 ? GameVariant.PLO6 : GameVariant.PLO5);
+
+    // Direct Uint8Array — zero-copy into Rust N-API
+    const heroBuf = new Uint8Array(heroIds);
+    const boardBuf = new Uint8Array(boardIds);
+    const deadBuf = new Uint8Array(deadIds);
+
+    const streetInt = STREET[street.toUpperCase()] ?? STREET.FLOP;
+
+    const t0 = performance.now();
+    let raw;
+
+    if (this._useNative) {
+      raw = this._native.solve({
+        game_variant: variant,
+        street: streetInt,
+        hero_cards: heroBuf,
+        board_cards: boardBuf,
+        dead_cards: deadBuf,
+        pot_bb100: potBb100,
+        hero_stack: heroStack,
+        villain_stacks: new Uint32Array(villainStacks),
+        num_opponents: opponents,
+      });
+    } else {
+      raw = this._fallback.solve({
+        game_variant: variant,
+        street: streetInt,
+        hero_cards: heroBuf,
+        board_cards: boardBuf,
+        dead_cards: deadBuf,
+        pot_bb100: potBb100,
+        hero_stack: heroStack,
+        num_opponents: opponents,
+      });
+    }
+
+    const elapsedUs = Math.round((performance.now() - t0) * 1000);
+    this._trackPerf(elapsedUs);
+
+    return {
+      action: ACTION_NAMES[raw.action] ?? "fold",
+      raiseAmount: raw.raise_amount_bb100 || 0,
+      equity: raw.equity || 0,
+      ev: raw.ev_bb100 || 0,
+      frequencies: {
+        fold: raw.freq_fold || 0,
+        check: raw.freq_check || 0,
+        call: raw.freq_call || 0,
+        raise: raw.freq_raise || 0,
+        allin: raw.freq_allin || 0,
+      },
+      confidence: raw.confidence || 0,
+      elapsedUs,
+      engine: this._useNative ? "rust-cfr" : "js-fallback",
+    };
+  }
+
   /**
    * Batch equity for multiple hands (multi-table support).
    * Each request is processed sequentially on the Rust side to avoid

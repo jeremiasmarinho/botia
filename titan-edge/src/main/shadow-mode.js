@@ -189,9 +189,9 @@ function formatButton(classId) {
   return `${YELLOW}${name.toUpperCase()}${RESET}`;
 }
 
-// ── Hero Region Threshold ───────────────────────────────────────────
+// ── Hero Region Threshold (normalized, matches game-loop.js) ────────
 
-const HERO_Y_THRESHOLD = 700;
+const HERO_Y_THRESHOLD = 0.65;
 
 // ── Global References ───────────────────────────────────────────────
 

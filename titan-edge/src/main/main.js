@@ -77,6 +77,9 @@ let bootstrapResult = null;
 /** Latest vision detections (updated by inference window) */
 let lastVisionResult = null;
 
+/** Stored LDPlayer source ID for resumeVision (prevents sourceId: undefined crash) */
+let activeLdSourceId = null;
+
 // ── App Lifecycle ───────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
@@ -289,8 +292,15 @@ function initGameLoop() {
 
     /** Resume vision capture (re-enter WAITING). */
     resumeVision: () => {
-      if (inferenceWindow && !inferenceWindow.isDestroyed()) {
-        inferenceWindow.webContents.send(IPC.VISION_START, {});
+      if (
+        inferenceWindow &&
+        !inferenceWindow.isDestroyed() &&
+        activeLdSourceId
+      ) {
+        inferenceWindow.webContents.send(IPC.VISION_START, {
+          sourceId: activeLdSourceId,
+          fps: 5,
+        });
       }
     },
   });
@@ -451,6 +461,8 @@ function registerIpcHandlers() {
     if (!inferenceWindow || inferenceWindow.isDestroyed()) {
       return { error: "Inference window not available" };
     }
+    // Store sourceId for resumeVision (COOLDOWN → WAITING recovery)
+    if (sourceId) activeLdSourceId = sourceId;
     inferenceWindow.webContents.send(IPC.VISION_START, { sourceId, fps });
     return { ok: true };
   });

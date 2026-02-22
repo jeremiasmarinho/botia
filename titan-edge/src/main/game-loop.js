@@ -366,6 +366,15 @@ class GameLoop extends EventEmitter {
 
   /**
    * CALCULATING state: compute equity and make decision.
+   *
+   * Primary path:  solver.solveFromIds() → Rust N-API (zero-copy Uint8Array)
+   *                Returns action + equity + EV + confidence in <3ms.
+   *
+   * Fallback path: solver.equityFromIds() → raw equity
+   *                GtoEngine.decide()     → action from equity + game state
+   *                Used when Rust addon is unavailable (JS fallback) or
+   *                when the solver fails.
+   *
    * @private
    */
   async _runCalculation() {
@@ -377,58 +386,104 @@ class GameLoop extends EventEmitter {
       // ── Build Game State ──────────────────────────────────────
       const gameState = this._buildGameState(cards, buttons);
 
-      // ── Equity Calculation (Rust N-API < 3ms) ─────────────────
-      let equity = 0.5; // fallback
+      let action, equity, confidence, reasoning;
+
+      // ── Primary: Solver full solve (Rust N-API / JS fallback) ─
       if (this._solver?.initialized) {
         try {
-          const equityResult = this._solver.equity({
-            heroCards: gameState.heroCards,
-            board: gameState.board,
+          const result = this._solver.solveFromIds({
+            heroIds: gameState.heroCards,
+            boardIds: gameState.board,
+            street: gameState.street,
+            potBb100: gameState.potSize,
+            heroStack: gameState.stackSize,
             opponents: gameState.opponents,
-            variant: gameState.variant,
           });
-          equity = equityResult.equity ?? 0.5;
+
+          action = result.action;
+          equity = result.equity;
+          confidence = result.confidence;
+          reasoning = `${result.engine} ${result.elapsedUs}µs EV=${result.ev}`;
+
+          this._log.info(
+            `[GameLoop] Solver: ${action.toUpperCase()} ` +
+              `(equity=${(equity * 100).toFixed(1)}%, ` +
+              `conf=${(confidence * 100).toFixed(0)}%, ` +
+              `${result.elapsedUs}µs ${result.engine})`,
+          );
         } catch (err) {
-          this._log.warn(`[GameLoop] Equity calc failed: ${err.message}`);
+          this._log.warn(
+            `[GameLoop] Solver failed: ${err.message} — falling back to GtoEngine`,
+          );
         }
       }
 
-      // ── GTO Decision ──────────────────────────────────────────
-      const decision = this._GtoEngine.decide({
-        equity,
-        potOdds: gameState.potOdds,
-        spr: gameState.spr,
-        street: gameState.street,
-        inPosition: gameState.inPosition,
-        opponents: gameState.opponents,
-        betFacing: gameState.betFacing,
-        potSize: gameState.potSize,
-        stackSize: gameState.stackSize,
-      });
+      // ── Fallback: GtoEngine (if solver unavailable or failed) ─
+      if (!action) {
+        let rawEquity = 0.5;
+        if (this._solver?.initialized) {
+          try {
+            const eqResult = this._solver.equityFromIds({
+              heroIds: gameState.heroCards,
+              boardIds: gameState.board,
+              opponents: gameState.opponents,
+            });
+            rawEquity = eqResult.equity ?? 0.5;
+          } catch {
+            /* use default 0.5 */
+          }
+        }
 
-      this._log.info(
-        `[GameLoop] Decision: ${decision.action} ` +
-          `(equity=${(equity * 100).toFixed(1)}%, ` +
-          `confidence=${(decision.confidence * 100).toFixed(0)}%)`,
-      );
+        const gtoDecision = this._GtoEngine.decide({
+          equity: rawEquity,
+          potOdds: gameState.potOdds,
+          spr: gameState.spr,
+          street: gameState.street,
+          inPosition: gameState.inPosition,
+          opponents: gameState.opponents,
+          betFacing: gameState.betFacing,
+          potSize: gameState.potSize,
+          stackSize: gameState.stackSize,
+        });
+
+        action = gtoDecision.action;
+        equity = rawEquity;
+        confidence = gtoDecision.confidence;
+        reasoning = gtoDecision.reasoning;
+
+        this._log.info(
+          `[GameLoop] GtoEngine: ${action.toUpperCase()} ` +
+            `(equity=${(equity * 100).toFixed(1)}%, ${reasoning})`,
+        );
+      }
 
       // ── Map Decision to Button BBox ───────────────────────────
-      const targetBbox = this._findButtonBbox(decision.action, buttons);
+      const targetBbox = this._findButtonBbox(action, buttons);
 
       if (!targetBbox) {
         this._log.warn(
-          `[GameLoop] No button found for action "${decision.action}" — aborting cycle`,
+          `[GameLoop] No button found for action "${action}" — aborting cycle`,
         );
         this._transitionTo(LoopState.WAITING);
         return;
       }
 
       // ── Determine Difficulty for Humanizer ────────────────────
-      const difficulty = this._mapDifficulty(decision.confidence);
+      const difficulty = this._mapDifficulty(confidence);
+
+      this._log.info(
+        `[GameLoop] → ${action.toUpperCase()} tap target ` +
+          `(${targetBbox.x},${targetBbox.y} ${targetBbox.width}×${targetBbox.height}) ` +
+          `difficulty=${difficulty}`,
+      );
 
       // ── Transition to EXECUTING ───────────────────────────────
       this._transitionTo(LoopState.EXECUTING);
-      await this._runExecution(targetBbox, difficulty, decision);
+      await this._runExecution(targetBbox, difficulty, {
+        action,
+        confidence,
+        equity,
+      });
     } catch (err) {
       this._log.error(`[GameLoop] Calculation error: ${err.message}`);
       this._transitionTo(LoopState.WAITING);
@@ -664,7 +719,10 @@ class GameLoop extends EventEmitter {
    */
   _extractHeroCards(payload) {
     return (payload.detections || []).filter(
-      (d) => d.classId >= 0 && d.classId <= CARD_CLASS_MAX && d.cy > HERO_REGION_Y_NORM,
+      (d) =>
+        d.classId >= 0 &&
+        d.classId <= CARD_CLASS_MAX &&
+        d.cy > HERO_REGION_Y_NORM,
     );
   }
 
@@ -715,7 +773,11 @@ class GameLoop extends EventEmitter {
    * Find the YOLO bounding box for a given action name.
    *
    * Maps GTO decision actions to YOLO classIds:
-   *   fold(52), check(53), call(54→53), raise(54), allin(59)
+   *   fold(52), check(53), call(53 fallback), raise(54+), allin(59)
+   *
+   * Detection coordinates are normalized [0,1]. This method converts
+   * them to Android pixel space using the ADB screen resolution so
+   * that ADB tap commands hit the correct physical location.
    *
    * @private
    * @param {string} action - 'fold' | 'check' | 'call' | 'raise' | 'allin'
@@ -734,14 +796,23 @@ class GameLoop extends EventEmitter {
 
     const targetClasses = ACTION_TO_CLASS[action] || [];
 
+    // Detection cx/cy/w/h are normalized [0, 1].
+    // ADB expects Android pixel coordinates.
+    // Default to bootstrapped resolution (1080×1920) if ADB unavailable.
+    const screen = this._adb?.screenSize || { width: 0, height: 0 };
+    const sw = screen.width || 1080;
+    const sh = screen.height || 1920;
+
     for (const classId of targetClasses) {
       const btn = buttons.find((b) => b.classId === classId);
       if (btn) {
+        const bw = Math.round(btn.w * sw);
+        const bh = Math.round(btn.h * sh);
         return {
-          x: Math.round(btn.cx - btn.w / 2),
-          y: Math.round(btn.cy - btn.h / 2),
-          width: Math.round(btn.w),
-          height: Math.round(btn.h),
+          x: Math.round(btn.cx * sw - bw / 2),
+          y: Math.round(btn.cy * sh - bh / 2),
+          width: bw,
+          height: bh,
         };
       }
     }
