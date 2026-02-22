@@ -36,6 +36,7 @@ Environment variables
 
 from __future__ import annotations
 
+import math
 import os
 import random
 from dataclasses import dataclass, field
@@ -43,6 +44,10 @@ from typing import Any
 
 from workflows.thresholds import select_action as select_action_deterministic
 from workflows.thresholds import information_quality  # re-export
+
+# Minimum observed hands before exploiting opponent tendencies.
+# Below this threshold, opponent classification is unreliable.
+_MIN_HANDS_FOR_EXPLOIT: int = 50
 
 
 # ── Action ranking (for comparisons) ────────────────────────────────────
@@ -230,6 +235,29 @@ class MixedStrategy:
         # Start with sigmoid-based soft thresholds
         p_fold, p_call, p_raise_s, p_raise_b = self._sigmoid_baseline(score, street)
 
+        # ── Consistency floor: prevent GTO from overriding clear +EV decisions ──
+        # When the deterministic engine (which accounts for all contextual
+        # adjustments) says to continue (call/raise), the sigmoid baseline
+        # must NOT assign excessive fold probability.  Capping p_fold
+        # ensures the mixed strategy stays consistent with the EV signal.
+        from workflows.gto_engine import ACTION_RANK  # local ref for clarity
+        if ACTION_RANK.get(det_action, 0) >= ACTION_RANK["call"]:
+            max_fold = 0.08  # at most 8% fold when deterministic says continue
+            if p_fold > max_fold:
+                excess = p_fold - max_fold
+                p_fold = max_fold
+                # Redistribute excess proportionally into call + raises
+                p_call += excess * 0.60
+                p_raise_s += excess * 0.25
+                p_raise_b += excess * 0.15
+        elif ACTION_RANK.get(det_action, 0) >= ACTION_RANK["raise_small"]:
+            max_fold = 0.03
+            if p_fold > max_fold:
+                excess = p_fold - max_fold
+                p_fold = max_fold
+                p_raise_s += excess * 0.55
+                p_raise_b += excess * 0.45
+
         # Bluff injection: even with weak hands, maintain some aggression
         # BUT: against a Fish / calling station with sufficient sample,
         # bluffing is -EV → reduce to near zero.
@@ -260,11 +288,9 @@ class MixedStrategy:
             table_position, street,
         )
 
-        # Opponent adaptation — requires minimum sample size (50 hands)
-        # Below 50 hands, opponent classification is unreliable and the bot
-        # plays pure GTO (equilibrado) to avoid being counter-exploited by
-        # opponents who shift style after a few hands.
-        _MIN_HANDS_FOR_EXPLOIT = 50
+        # Opponent adaptation — requires minimum sample size
+        # Below the threshold, opponent classification is unreliable and the
+        # bot plays pure GTO to avoid being counter-exploited.
         if opponent is not None and opponent.hands_observed >= _MIN_HANDS_FOR_EXPLOIT:
             p_fold, p_call, p_raise_s, p_raise_b = self._opponent_adjust(
                 p_fold, p_call, p_raise_s, p_raise_b,
@@ -292,8 +318,6 @@ class MixedStrategy:
         smooth transition curve.  Equal equity values get spread across
         nearby actions, creating implicit mixed strategies.
         """
-        import math
-
         # Street-dependent inflection points (where each action peaks)
         inflections: dict[str, tuple[float, float, float]] = {
             "preflop": (0.38, 0.55, 0.72),  # call, raise_small, raise_big
@@ -347,7 +371,6 @@ class MixedStrategy:
         # A Fish (VPIP > 55%, aggression < 1.2) calls too much to bluff.
         # With ≥ 50 hands of data we are confident in the classification.
         # Reduce bluff to 2% (minimal uncertainty hedge only).
-        _MIN_HANDS_FOR_EXPLOIT = 50
         if (
             opponent is not None
             and opponent.hands_observed >= _MIN_HANDS_FOR_EXPLOIT

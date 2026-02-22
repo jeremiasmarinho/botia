@@ -33,9 +33,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from agent.ghost_mouse import (
+from agent.ghost_mouse import GhostMouse
+from tools.mouse_protocol import (
     ClickPoint,
-    GhostMouse,
     GhostMouseConfig,
     classify_difficulty,
 )
@@ -138,7 +138,7 @@ class ActionTool:
             self._log.warn(
                 f"dispatch action={action_lower} street={street} target=<none> difficulty={difficulty}"
             )
-            delay = self._ghost._thinking_delay(difficulty)
+            delay = self._ghost.thinking_delay(difficulty)
 
         return f"action={action} delay={delay:.2f}s difficulty={difficulty}"
 
@@ -183,7 +183,7 @@ class ActionTool:
             self._log.warn(
                 f"dispatch action={action} street={street} sequence=<empty> difficulty={difficulty}"
             )
-            delay = self._ghost._thinking_delay(difficulty)
+            delay = self._ghost.thinking_delay(difficulty)
 
         return f"action={action} delay={delay:.2f}s difficulty={difficulty}"
 

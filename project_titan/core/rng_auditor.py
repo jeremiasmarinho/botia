@@ -68,15 +68,19 @@ class PlayerAuditStats:
 class RngAuditor:
     """Accumulates showdown samples and flags statistically anomalous players."""
 
-    def __init__(self, super_user_zscore: float = 3.0, min_samples: int = 25) -> None:
+    def __init__(self, super_user_zscore: float = 3.0, min_samples: int = 25, max_samples_per_player: int = 500) -> None:
         self._samples: dict[str, list[AuditSample]] = defaultdict(list)
         self.super_user_zscore = float(super_user_zscore)
         self.min_samples = max(3, int(min_samples))
+        self.max_samples_per_player = max(50, int(max_samples_per_player))
 
     def add_sample(self, player_id: str, expected_value: float, observed: float) -> None:
         expected = min(max(float(expected_value), 0.0), 1.0)
         obs = min(max(float(observed), 0.0), 1.0)
-        self._samples[player_id].append(AuditSample(expected, obs))
+        bucket = self._samples[player_id]
+        bucket.append(AuditSample(expected, obs))
+        if len(bucket) > self.max_samples_per_player:
+            self._samples[player_id] = bucket[-self.max_samples_per_player:]
 
     def add_allin_result(self, player_id: str, equity: float, won: bool) -> None:
         self.add_sample(player_id=player_id, expected_value=equity, observed=1.0 if won else 0.0)

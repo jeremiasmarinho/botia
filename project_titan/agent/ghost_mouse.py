@@ -34,6 +34,14 @@ from random import gauss, lognormvariate, random, uniform
 from typing import Any
 
 from utils.logger import TitanLogger
+from tools.mouse_protocol import (  # canonical definitions
+    ClickPoint,
+    GhostMouseConfig,
+    classify_difficulty,
+    _DIFFICULTY_EASY,
+    _DIFFICULTY_MEDIUM,
+    _DIFFICULTY_HARD,
+)
 
 try:
     import pyautogui  # type: ignore[import-untyped]
@@ -50,10 +58,8 @@ except Exception:
 # Data classes
 # ---------------------------------------------------------------------------
 
-@dataclass(slots=True)
-class ClickPoint:
-    x: int
-    y: int
+# Re-exported from tools.mouse_protocol for back-compat
+# ClickPoint, GhostMouseConfig, classify_difficulty already imported above
 
 
 @dataclass(slots=True)
@@ -62,49 +68,7 @@ class CurvePoint:
     y: float
 
 
-@dataclass(slots=True)
-class GhostMouseConfig:
-    """Tunables for humanised movement."""
-
-    # Bézier generation
-    control_point_spread: float = 0.35  # max % of distance for control-point offset
-    noise_amplitude: float = 3.0  # px noise added to each interpolated point
-    steps_per_100px: int = 18  # interpolation density
-
-    # Timing (seconds) by decision difficulty
-    timing_easy: tuple[float, float] = (0.8, 1.5)
-    timing_medium: tuple[float, float] = (2.0, 4.0)
-    timing_hard: tuple[float, float] = (4.0, 12.0)
-
-    # Click parameters — log-normal distribution
-    click_hold_mu: float = -2.7       # log-normal μ  → median ~67ms
-    click_hold_sigma: float = 0.35    # log-normal σ  → occasional long holds
-    click_hold_min: float = 0.03      # absolute floor (30ms)
-    click_hold_max: float = 0.25      # absolute ceiling (250ms)
-    click_jitter_px: float = 2.0      # max random offset in px applied to final click position
-
-    # Movement duration (seconds per 100px distance)
-    move_duration_per_100px: float = 0.06
-
-    # Velocity curve — ease-in/ease-out parameters
-    velocity_curve_enabled: bool = True
-    velocity_ease_strength: float = 2.2  # exponent for sinusoidal easing (higher = more pronounced)
-
-    # Micro-overshoot — human correction
-    overshoot_probability: float = 0.12   # 12% chance of overshooting the target
-    overshoot_distance_px: tuple[float, float] = (5.0, 14.0)  # overshoot 5-14px past target
-    overshoot_correction_ms: tuple[float, float] = (40.0, 120.0)  # correction movement duration
-
-    # Idle jitter — micro-movements between actions
-    idle_jitter_enabled: bool = True
-    idle_jitter_amplitude_px: float = 4.0  # max drift in px per idle move
-    idle_jitter_interval: tuple[float, float] = (0.8, 3.0)  # seconds between idle jitters
-
-    # Poisson reaction delay
-    poisson_delay_enabled: bool = True
-    poisson_lambda_easy: float = 1.2    # λ for easy decisions (~1.2s mean)
-    poisson_lambda_medium: float = 3.0  # λ for medium decisions (~3.0s mean)
-    poisson_lambda_hard: float = 7.0    # λ for hard decisions (~7.0s mean)
+# GhostMouseConfig imported from tools.mouse_protocol (canonical definition)
 
 
 # ---------------------------------------------------------------------------
@@ -168,37 +132,9 @@ def _generate_bezier_path(
 
 
 # ---------------------------------------------------------------------------
-# Decision-difficulty classifier
+# Decision-difficulty classifier (canonical source: tools.mouse_protocol)
+# classify_difficulty, _DIFFICULTY_* imported at module top
 # ---------------------------------------------------------------------------
-
-_DIFFICULTY_EASY = "easy"
-_DIFFICULTY_MEDIUM = "medium"
-_DIFFICULTY_HARD = "hard"
-
-
-def classify_difficulty(action: str, street: str = "preflop") -> str:
-    """Infer decision difficulty from the chosen action and street.
-
-    Spec references:
-        Easy  (preflop fold): 0.8 – 1.5 s
-        Hard  (river bluff):  4.0 – 12.0 s
-    """
-    action_lower = action.strip().lower()
-
-    if action_lower == "fold" and street == "preflop":
-        return _DIFFICULTY_EASY
-
-    if action_lower in {"raise_big", "raise_small", "raise_pot"} and street in {"turn", "river"}:
-        return _DIFFICULTY_HARD
-
-    if action_lower == "fold" and street in {"turn", "river"}:
-        return _DIFFICULTY_MEDIUM
-
-    if action_lower in {"raise_big", "raise_small", "raise_pot", "raise_2x"}:
-        return _DIFFICULTY_MEDIUM
-
-    # call anywhere, fold on flop, etc.
-    return _DIFFICULTY_EASY
 
 
 def classify_difficulty_by_equity(action: str, street: str = "preflop", equity: float = 0.5) -> str:
@@ -326,7 +262,7 @@ class GhostMouse:
         Returns:
             O delay de "pensamento" em segundos (já aguardado internamente).
         """
-        delay = self._thinking_delay(difficulty)
+        delay = self.thinking_delay(difficulty)
         target = self._to_screen(point) if relative else point
         label = (action_name or "unknown").strip().lower() or "unknown"
         self._log.info(
@@ -364,10 +300,10 @@ class GhostMouse:
             Total delay in seconds (thinking + inter-click pauses).
         """
         if not points:
-            return self._thinking_delay(difficulty)
+            return self.thinking_delay(difficulty)
 
         label = (action_name or "unknown").strip().lower() or "unknown"
-        total_delay = self._thinking_delay(difficulty)
+        total_delay = self.thinking_delay(difficulty)
 
         for idx, pt in enumerate(points):
             target = self._to_screen(pt) if relative else pt
@@ -401,7 +337,7 @@ class GhostMouse:
 
     # -- Helpers internos ----------------------------------------------------
 
-    def _thinking_delay(self, difficulty: str) -> float:
+    def thinking_delay(self, difficulty: str) -> float:
         """Retorna um delay baseado em distribuição de Poisson modulada pela dificuldade.
 
         Se Poisson está desativado, usa distribuição uniforme (legacy).

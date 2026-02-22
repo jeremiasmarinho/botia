@@ -33,13 +33,18 @@ class AgentRuntimeConfig:
 
 @dataclass(slots=True)
 class VisionRuntimeConfig:
-    """Vision subsystem configuration (monitor region + model path)."""
+    """Vision subsystem configuration (monitor region + model path).
 
-    model_path: str = os.getenv("TITAN_YOLO_MODEL", "")
-    monitor_left: int = int(os.getenv("TITAN_MONITOR_LEFT", "0"))
-    monitor_top: int = int(os.getenv("TITAN_MONITOR_TOP", "0"))
-    monitor_width: int = int(os.getenv("TITAN_MONITOR_WIDTH", "0"))
-    monitor_height: int = int(os.getenv("TITAN_MONITOR_HEIGHT", "0"))
+    NOTE: All fields use ``default_factory`` so that environment variables
+    are read at **instantiation** time, not at import/class-definition time.
+    This ensures ``monkeypatch.setenv`` in tests works correctly.
+    """
+
+    model_path: str = field(default_factory=lambda: os.getenv("TITAN_YOLO_MODEL", ""))
+    monitor_left: int = field(default_factory=lambda: int(os.getenv("TITAN_MONITOR_LEFT", "0")))
+    monitor_top: int = field(default_factory=lambda: int(os.getenv("TITAN_MONITOR_TOP", "0")))
+    monitor_width: int = field(default_factory=lambda: int(os.getenv("TITAN_MONITOR_WIDTH", "0")))
+    monitor_height: int = field(default_factory=lambda: int(os.getenv("TITAN_MONITOR_HEIGHT", "0")))
 
     def monitor_region(self) -> dict[str, int] | None:
         """Return an ``mss``-compatible monitor dict, or ``None`` for full screen."""

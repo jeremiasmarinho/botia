@@ -388,15 +388,15 @@ class TestGhostMouseThinkingDelay:
         cfg = GhostMouseConfig(poisson_delay_enabled=True)
         gm = GhostMouse(config=cfg)
         for _ in range(100):
-            delay = gm._thinking_delay(_DIFFICULTY_EASY)
+            delay = gm.thinking_delay(_DIFFICULTY_EASY)
             assert cfg.timing_easy[0] <= delay <= cfg.timing_easy[1]
 
     def test_hard_delay_longer_than_easy(self):
         """Hard decisions should have longer delays on average."""
         cfg = GhostMouseConfig(poisson_delay_enabled=True)
         gm = GhostMouse(config=cfg)
-        easy_delays = [gm._thinking_delay(_DIFFICULTY_EASY) for _ in range(200)]
-        hard_delays = [gm._thinking_delay(_DIFFICULTY_HARD) for _ in range(200)]
+        easy_delays = [gm.thinking_delay(_DIFFICULTY_EASY) for _ in range(200)]
+        hard_delays = [gm.thinking_delay(_DIFFICULTY_HARD) for _ in range(200)]
         assert sum(hard_delays) / len(hard_delays) > sum(easy_delays) / len(easy_delays)
 
     def test_legacy_delay_when_poisson_disabled(self):
@@ -404,7 +404,7 @@ class TestGhostMouseThinkingDelay:
         cfg = GhostMouseConfig(poisson_delay_enabled=False)
         gm = GhostMouse(config=cfg)
         for _ in range(50):
-            delay = gm._thinking_delay(_DIFFICULTY_MEDIUM)
+            delay = gm.thinking_delay(_DIFFICULTY_MEDIUM)
             assert cfg.timing_medium[0] <= delay <= cfg.timing_medium[1]
 
 

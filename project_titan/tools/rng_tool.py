@@ -16,6 +16,7 @@ import os
 from typing import Any
 
 from core.rng_auditor import PlayerAuditStats, RngAuditor
+from workflows.protocol import SupportsMemory
 
 
 @dataclass(slots=True)
@@ -35,14 +36,6 @@ class RngAlert:
     sample_count: int
 
 
-class SupportsStorage:
-    """Structural subtype for the persistence backend."""
-
-    def set(self, key: str, value: Any) -> None: ...
-
-    def get(self, key: str, default: Any = None) -> Any: ...
-
-
 class RngTool:
     """High-level interface for showdown ingestion and evasion checks."""
 
@@ -50,7 +43,7 @@ class RngTool:
         self,
         super_user_zscore: float = 3.0,
         min_samples: int = 25,
-        storage: SupportsStorage | None = None,
+        storage: SupportsMemory | None = None,
         storage_key: str | None = None,
         max_samples_per_player: int = 1000,
     ) -> None:

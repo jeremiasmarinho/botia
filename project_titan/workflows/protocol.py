@@ -20,8 +20,8 @@ class SupportsMemory(Protocol):
     * ``dict``-wrapper in E2E tests
     """
 
-    def set(self, key: str, value: Any) -> None:
-        """Persist *value* under *key*."""
+    def set(self, key: str, value: Any, *, ttl: int = 0) -> None:
+        """Persist *value* under *key* with optional TTL in seconds."""
         ...
 
     def get(self, key: str, default: Any = None) -> Any:

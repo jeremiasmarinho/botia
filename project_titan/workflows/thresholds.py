@@ -28,6 +28,8 @@ Maintainer notes
 
 from __future__ import annotations
 
+from utils.card_utils import pot_odds as _pot_odds, spr as _spr
+
 
 def information_quality(
     hero_cards: list[str],
@@ -44,20 +46,6 @@ def information_quality(
     """
     observed = len(hero_cards) + len(board_cards) + len(dead_cards)
     return min(max(observed / 12.0, 0.0), 1.0)
-
-
-def _pot_odds(pot: float, stack: float) -> float:
-    """Fraction of the total that must be risked to stay in the hand."""
-    if pot <= 0 or stack <= 0:
-        return 0.0
-    return pot / max(pot + stack, 1e-6)
-
-
-def _spr(pot: float, stack: float) -> float:
-    """Stack-to-pot ratio — high means deep-stacked, low means committed."""
-    if pot <= 0 or stack <= 0:
-        return 99.0
-    return stack / max(pot, 1e-6)
 
 
 def select_action(

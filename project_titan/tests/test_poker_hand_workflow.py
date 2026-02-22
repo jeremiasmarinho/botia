@@ -7,6 +7,17 @@ import pytest
 from workflows.poker_hand_workflow import Decision, PokerHandWorkflow
 
 
+class _AlwaysValidGuard:
+    """Test stub that always validates — bypasses OCR stability checks."""
+    last_reason: str = "ok"
+
+    def validate(self, pot: float, stack: float, call: float) -> bool:
+        return True
+
+    def reset(self) -> None:
+        pass
+
+
 pytest.importorskip("treys")
 
 
@@ -85,6 +96,7 @@ def _build_workflow(win_rate: float = 0.50) -> PokerHandWorkflow:
             action=cast(Any, DummyAction()),
             memory=cast(Any, DummyMemory()),
             rng=cast(Any, DummyRng()),
+            sanity_guard=cast(Any, _AlwaysValidGuard()),
         ),
     )
 
@@ -153,6 +165,7 @@ def test_ev_flush_draw_flop_prefers_continue_over_fold(monkeypatch: pytest.Monke
     monkeypatch.setenv("TITAN_TABLE_PROFILE", "aggressive")
     monkeypatch.setenv("TITAN_TABLE_POSITION", "btn")
     monkeypatch.setenv("TITAN_OPPONENTS", "1")
+    monkeypatch.setenv("TITAN_GTO_SEED", "1")
 
     workflow = _build_workflow(win_rate=0.46)
     snapshot = Snapshot(

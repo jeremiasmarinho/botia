@@ -15,6 +15,7 @@ Environment variables
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -201,7 +202,14 @@ class Orchestrator:
         try:
             while self._running:
                 for agent_name, agent in self.registry.agents.items():
-                    outcome = agent.step()
+                    try:
+                        outcome = agent.step()
+                    except Exception as exc:
+                        _log.error(
+                            f"agent '{agent_name}' raised {type(exc).__name__}: {exc} "
+                            "— skipping this tick for that agent"
+                        )
+                        continue
                     if outcome is not None:
                         total_outcomes += 1
                         _log.status(f"{agent_name}: {self._format_outcome_for_log(outcome)}")

@@ -227,6 +227,8 @@ class OpponentDB:
             self._ensure_player(event.player_id)
 
             updates: list[str] = []
+            params: list[float | str] = []
+
             if event.is_voluntary:
                 updates.append("voluntary_hands = voluntary_hands + 1")
             if event.is_preflop_raise:
@@ -254,22 +256,28 @@ class OpponentDB:
                 updates.append("showdown_hands = showdown_hands + 1")
 
             if event.bet_size_ratio > 0:
-                updates.append(f"bet_size_sum = bet_size_sum + {event.bet_size_ratio}")
+                updates.append("bet_size_sum = bet_size_sum + ?")
+                params.append(float(event.bet_size_ratio))
                 updates.append("bet_size_count = bet_size_count + 1")
 
-            updates.append(f"last_seen = {time.time()}")
+            updates.append("last_seen = ?")
+            params.append(time.time())
 
             if updates:
                 sql = f"UPDATE opponent_stats SET {', '.join(updates)} WHERE player_id = ?;"
-                self._conn.execute(sql, (event.player_id,))
+                params.append(event.player_id)
+                self._conn.execute(sql, params)
                 self._conn.commit()
 
     def record_batch(self, events: list[HandEvent]) -> None:
         """Record multiple events in a single transaction."""
         if self._disabled or not self._conn:
             return
-        for event in events:
-            self.record_event(event)
+        try:
+            for event in events:
+                self.record_event(event)
+        except Exception:
+            pass
 
     # ── Query API ───────────────────────────────────────────────────
 

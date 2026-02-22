@@ -130,3 +130,26 @@ def card_to_pt(card: str) -> str | None:
     if rank is None or suit is None:
         return None
     return f"{rank} de {suit}"
+
+
+# ── Poker math helpers ────────────────────────────────────────────
+
+
+def pot_odds(pot: float, stack: float) -> float:
+    """Fraction of the total that must be risked to stay in the hand.
+
+    ``pot / (pot + stack)``  — returns 0.0 when pot or stack is non-positive.
+    """
+    if pot <= 0 or stack <= 0:
+        return 0.0
+    return pot / max(pot + stack, 1e-6)
+
+
+def spr(pot: float, stack: float) -> float:
+    """Stack-to-pot ratio — high means deep-stacked, low means committed.
+
+    Returns 99.0 when pot or stack is non-positive (ultra-deep sentinel).
+    """
+    if pot <= 0 or stack <= 0:
+        return 99.0
+    return stack / max(pot, 1e-6)

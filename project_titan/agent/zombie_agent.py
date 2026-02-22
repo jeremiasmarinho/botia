@@ -8,9 +8,12 @@ without side effects.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 from typing import Protocol
+
+_log = logging.getLogger("titan.zombie_agent")
 
 
 class SupportsStep(Protocol):
@@ -26,5 +29,14 @@ class ZombieAgent:
     workflow: SupportsStep
 
     def step(self) -> Any:
-        """Run the workflow once and return its outcome payload."""
-        return self.workflow.execute()
+        """Run the workflow once and return its outcome payload.
+
+        Catches unexpected exceptions from the workflow so a single bad
+        tick never takes down the orchestrator loop.  Returns ``None`` on
+        failure so the engine can simply skip the result.
+        """
+        try:
+            return self.workflow.execute()
+        except Exception as exc:
+            _log.error("workflow.execute() raised %s: %s", type(exc).__name__, exc)
+            return None

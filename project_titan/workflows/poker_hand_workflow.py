@@ -58,6 +58,7 @@ Environment variables
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import os
 import time
 from typing import Any
@@ -67,6 +68,7 @@ from tools.equity_tool import EquityTool
 from tools.rng_tool import RngTool
 from tools.vision_tool import VisionTool
 
+from agent.sanity_guard import SanityGuard
 from workflows.protocol import SupportsMemory
 from workflows.thresholds import information_quality, select_action
 from workflows.gto_engine import MixedStrategy, OpponentTendencies, ActionDistribution
@@ -132,6 +134,7 @@ class PokerHandWorkflow:
     rng: RngTool
     gto: MixedStrategy = field(default_factory=MixedStrategy)
     opponent_db: OpponentDB = field(default_factory=OpponentDB)
+    sanity_guard: SanityGuard = field(default_factory=SanityGuard)
 
     # ── Configuration helpers (env-var readers) ─────────────────────
 
@@ -353,23 +356,13 @@ class PokerHandWorkflow:
     from utils.card_utils import normalize_card as _normalize_card_fn
     from utils.card_utils import merge_dead_cards as _merge_fn
     from utils.card_utils import street_from_board as _street_fn
+    from utils.card_utils import pot_odds as _pot_odds_fn
+    from utils.card_utils import spr as _spr_fn
     _normalize_card = staticmethod(_normalize_card_fn)
     _merge_dead_cards = staticmethod(_merge_fn)
     _street_from_board = staticmethod(_street_fn)
-
-    @staticmethod
-    def _pot_odds(pot: float, stack: float) -> float:
-        """Compute simple pot odds as ``pot / (pot + stack)``."""
-        if pot <= 0 or stack <= 0:
-            return 0.0
-        return pot / max(pot + stack, 1e-6)
-
-    @staticmethod
-    def _spr(pot: float, stack: float) -> float:
-        """Compute the stack-to-pot ratio."""
-        if pot <= 0 or stack <= 0:
-            return 99.0
-        return stack / max(pot, 1e-6)
+    _pot_odds = staticmethod(_pot_odds_fn)
+    _spr = staticmethod(_spr_fn)
 
     # ── Main execution pipeline ─────────────────────────────────────
 
@@ -414,6 +407,19 @@ class PokerHandWorkflow:
         _t0 = time.perf_counter()
         snapshot = snapshot if snapshot is not None else self.vision.read_table()
         _latency["vision_ms"] = (time.perf_counter() - _t0) * 1000
+
+        # ── 1b. Sanity Guard — OCR stability check ─────────────────
+        _pot_raw = self._to_float(getattr(snapshot, "pot", 0.0))
+        _stack_raw = self._to_float(getattr(snapshot, "stack", 0.0))
+        _call_raw = self._to_float(getattr(snapshot, "call_amount", 0.0))
+        if not self.sanity_guard.validate(_pot_raw, _stack_raw, _call_raw):
+            logging.getLogger("titan.workflow").debug(
+                "SanityGuard blocked: %s", self.sanity_guard.last_reason,
+            )
+            return Decision(
+                action="wait",
+                description=f"SanityGuard: {self.sanity_guard.last_reason}",
+            )
 
         # ── 2. Hive mode resolution ────────────────────────────────
         hive_mode = self._resolve_hive_mode(hive_data)
@@ -748,7 +754,6 @@ class PokerHandWorkflow:
             breakdown = " | ".join(
                 f"{k}={v:.0f}" for k, v in sorted(_latency.items())
             )
-            import logging
             logging.getLogger("titan.workflow").warning(
                 f"LATENCY WARNING: cycle={_latency['total_ms']:.0f}ms "
                 f"exceeds {_LATENCY_WARN_MS:.0f}ms threshold | {breakdown}"

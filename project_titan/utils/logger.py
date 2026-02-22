@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 
 
@@ -85,6 +86,8 @@ def _log_file_path() -> str | None:
 class TitanLogger:
     """Simple coloured logger with module prefix."""
 
+    _file_lock = threading.Lock()
+
     # Colour palette per module
     _MODULE_COLORS: dict[str, str] = {
         "HiveBrain": _FG_MAGENTA,
@@ -104,7 +107,7 @@ class TitanLogger:
         self._log_file = _log_file_path()
 
     def _write_file_log(self, level: str, message: str) -> None:
-        """Append structured log event to JSONL file."""
+        """Append structured log event to JSONL file (thread-safe)."""
         if self._log_file is None:
             return
         payload = {
@@ -113,9 +116,11 @@ class TitanLogger:
             "level": level,
             "message": message,
         }
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
         try:
-            with open(self._log_file, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            with self._file_lock:
+                with open(self._log_file, "a", encoding="utf-8") as handle:
+                    handle.write(line)
         except OSError:
             return
 
