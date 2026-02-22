@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld("titanAPI", {
   // ── Execution ───────────────────────────────────────────────────
   tap: (x, y, ghost = true) => ipcRenderer.invoke(IPC.ADB_TAP, { x, y, ghost }),
 
+  // ── Game Loop Control ───────────────────────────────────────────
+  startGameLoop: () => ipcRenderer.invoke(IPC.GAMELOOP_START),
+  stopGameLoop: () => ipcRenderer.invoke(IPC.GAMELOOP_STOP),
+  getGameLoopStats: () => ipcRenderer.invoke(IPC.GAMELOOP_STATS),
+
   // ── Profiling (variant-isolated) ────────────────────────────────
   getOpponent: (playerId, variant) =>
     ipcRenderer.invoke(IPC.OPPONENT_QUERY, {

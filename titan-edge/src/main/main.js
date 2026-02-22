@@ -426,9 +426,12 @@ function registerIpcHandlers() {
   ipcMain.on(IPC.VISION_DETECTIONS, (_event, payload) => {
     lastVisionResult = payload;
 
-    const { cards, buttons, inferenceMs, frameId: fid } = payload;
+    const detections = payload.detections || [];
+    const cardCount = detections.filter((d) => d.classId <= 51).length;
+    const buttonCount = detections.filter((d) => d.classId >= 52 && d.classId <= 61).length;
+    const { inferenceMs, frameId: fid } = payload;
     log.debug(
-      `[Vision] Frame #${fid}: ${cards?.length || 0} cards, ${buttons?.length || 0} buttons (${inferenceMs}ms)`,
+      `[Vision] Frame #${fid}: ${cardCount} cards, ${buttonCount} buttons (${inferenceMs}ms)`,
     );
 
     // Forward detection summary to dashboard
@@ -441,11 +444,50 @@ function registerIpcHandlers() {
   });
 
   // ── Vision: Status from inference window ──────────────────────
-  ipcMain.on(IPC.VISION_STATUS, (_event, status) => {
+  ipcMain.on(IPC.VISION_STATUS, async (_event, status) => {
     log.info(
       `[Vision] Engine status: ready=${status.ready} backend=${status.backend} classes=${status.modelClasses}`,
     );
     mainWindow?.webContents.send(IPC.VISION_STATUS, status);
+
+    // ── Auto-start vision when YOLO is ready ──────────────────
+    if (!status.ready) return;
+
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["window"],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+
+      const ldSource = sources.find((s) =>
+        s.name.toLowerCase().includes("ldplayer"),
+      );
+
+      if (ldSource && inferenceWindow && !inferenceWindow.isDestroyed()) {
+        activeLdSourceId = ldSource.id;
+        log.info(
+          `[Vision] Found LDPlayer window: "${ldSource.name}" (${ldSource.id})`,
+        );
+        inferenceWindow.webContents.send(IPC.VISION_START, {
+          sourceId: ldSource.id,
+          fps: 5,
+        });
+        log.info(`[Vision] Capture started @ 5 FPS`);
+
+        // Auto-start GameLoop now that vision is flowing
+        if (gameLoop && !gameLoop.running && adb?.connected) {
+          gameLoop.start();
+          log.info(`[GameLoop] Auto-started (LIVE mode — WAITING @ 5 FPS)`);
+        }
+      } else {
+        const names = sources.map((s) => s.name).slice(0, 10);
+        log.warn(
+          `[Vision] LDPlayer window not found. Available: ${names.join(", ")}`,
+        );
+      }
+    } catch (err) {
+      log.error(`[Vision] Auto-start failed: ${err.message}`);
+    }
   });
 
   // ── Vision: Error from inference window ───────────────────────
