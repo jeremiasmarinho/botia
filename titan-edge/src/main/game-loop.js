@@ -117,6 +117,14 @@ const BUTTON_CLASS_MAX = 61;
 const CARD_CLASS_MAX = 51;
 
 /**
+ * Normalized Y threshold for the hero-card region.
+ * Detection cy is in [0, 1] (0 = top, 1 = bottom).
+ * PPPoker hero cards sit in the bottom ~35% of the screen.
+ * 700 / 1012 ≈ 0.69 — we use 0.65 for a slight safety margin.
+ */
+const HERO_REGION_Y_NORM = 0.65;
+
+/**
  * @typedef {Object} LoopDependencies
  * @property {import('./execution/adb-bridge').AdbBridge} adb
  * @property {import('./brain/solver-bridge').SolverBridge} solver
@@ -252,16 +260,27 @@ class GameLoop extends EventEmitter {
    */
   _handleWaiting(payload) {
     const buttons = this._extractButtons(payload);
+    if (buttons.length === 0) return;
 
-    if (buttons.length > 0) {
-      this._cycleStartedAt = performance.now();
+    // Gate: buttons alone are not enough.  In PPPoker, visible action
+    // buttons mean it's our turn, which *requires* hero cards on screen.
+    // If YOLO sees buttons but no hero cards, it's a false-positive or
+    // an idle/transitioning table — stay at 5 FPS.
+    const heroCards = this._extractHeroCards(payload);
+    if (heroCards.length === 0) {
       this._log.debug(
-        `[GameLoop] Buttons detected (${buttons.length}) — entering PERCEPTION`,
+        `[GameLoop] Buttons detected (${buttons.length}) but 0 hero cards — staying in WAITING`,
       );
-      this._transitionTo(LoopState.PERCEPTION);
-      // Process this frame immediately in PERCEPTION context
-      this._handlePerception(payload);
+      return;
     }
+
+    this._cycleStartedAt = performance.now();
+    this._log.debug(
+      `[GameLoop] Buttons (${buttons.length}) + hero cards (${heroCards.length}) — entering PERCEPTION`,
+    );
+    this._transitionTo(LoopState.PERCEPTION);
+    // Process this frame immediately in PERCEPTION context
+    this._handlePerception(payload);
   }
 
   /**
@@ -639,6 +658,17 @@ class GameLoop extends EventEmitter {
   }
 
   /**
+   * Extract hero-region card detections.
+   * Hero cards sit in the bottom portion of the screen (cy > HERO_REGION_Y_NORM).
+   * @private
+   */
+  _extractHeroCards(payload) {
+    return (payload.detections || []).filter(
+      (d) => d.classId >= 0 && d.classId <= CARD_CLASS_MAX && d.cy > HERO_REGION_Y_NORM,
+    );
+  }
+
+  /**
    * Build a game state object from frozen detections.
    *
    * NOTE: This is a simplified version.  In production, this would
@@ -650,15 +680,13 @@ class GameLoop extends EventEmitter {
    * @returns {Object} GameState-compatible object
    */
   _buildGameState(cards, buttons) {
-    // Separate hero cards from board cards by their Y position
-    // Hero cards are typically in the bottom portion of the screen
-    const HERO_Y_THRESHOLD = 700; // pixels — below this = hero region
-
+    // Separate hero cards from board cards by normalized Y position.
+    // Detection cy is in [0, 1] after letterbox reversal in inference.js.
     const heroCards = cards
-      .filter((c) => c.cy > HERO_Y_THRESHOLD)
+      .filter((c) => c.cy > HERO_REGION_Y_NORM)
       .map((c) => c.classId);
     const board = cards
-      .filter((c) => c.cy <= HERO_Y_THRESHOLD)
+      .filter((c) => c.cy <= HERO_REGION_Y_NORM)
       .map((c) => c.classId);
 
     // Determine street from board card count
