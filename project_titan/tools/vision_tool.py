@@ -67,10 +67,10 @@ class VisionTool:
     # These define the vertical zones on the PPPoker screen used to
     # classify generic (un-prefixed) YOLO card detections as hero
     # or board cards.  Loaded from config_club.yaml ``vision.regions``.
-    _DEFAULT_HERO_Y_MIN: int = 750   # hero cards Y range start
-    _DEFAULT_HERO_Y_MAX: int = 950   # hero cards Y range end
-    _DEFAULT_BOARD_Y_MIN: int = 350  # board cards Y range start
-    _DEFAULT_BOARD_Y_MAX: int = 550  # board cards Y range end
+    _DEFAULT_HERO_Y_MIN: int = 830   # hero cards Y range start (720x1280 portrait)
+    _DEFAULT_HERO_Y_MAX: int = 1010  # hero cards Y range end
+    _DEFAULT_BOARD_Y_MIN: int = 450  # board cards Y range start
+    _DEFAULT_BOARD_Y_MAX: int = 650  # board cards Y range end
 
     def __init__(
         self,
@@ -449,11 +449,20 @@ class VisionTool:
     # ── Screen capture ──────────────────────────────────────────────
 
     def _capture_frame(self) -> Any | None:
-        """Grab the current screen (or monitor region) via ``mss``.
+        """Grab the current screen via ADB screencap (preferred) or ``mss`` fallback.
+
+        ADB screencap is immune to desktop window occlusion and always
+        returns the correct Android emulator content.
 
         Returns:
             A BGR numpy array or ``None`` on failure.
         """
+        # Try ADB screencap first (immune to window occlusion)
+        frame = self._capture_frame_adb()
+        if frame is not None:
+            return frame
+
+        # Fallback to mss desktop capture
         try:
             import mss
             import numpy as np
@@ -465,6 +474,39 @@ class VisionTool:
             frame = np.array(sct.grab(target))
         # mss captures BGRA; strip alpha channel for YOLO (expects BGR).
         return frame[:, :, :3]
+
+    def _capture_frame_adb(self) -> Any | None:
+        """Capture the Android screen via ADB ``screencap -p``.
+
+        Reads ``TITAN_ADB_PATH`` and ``TITAN_ADB_DEVICE`` env-vars.
+        Returns a BGR numpy array or ``None`` on failure.
+        """
+        try:
+            import subprocess
+            import numpy as np
+            import cv2
+
+            adb_path = os.getenv(
+                "TITAN_ADB_PATH",
+                r"F:\LDPlayer\LDPlayer9\adb.exe",
+            )
+            device = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
+
+            result = subprocess.run(
+                [adb_path, "-s", device, "exec-out", "screencap", "-p"],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode != 0 or len(result.stdout) < 100:
+                return None
+
+            buf = np.frombuffer(result.stdout, dtype=np.uint8)
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if img is None or img.size == 0:
+                return None
+            return img
+        except Exception:
+            return None
 
     # ── YOLO result → TableSnapshot ─────────────────────────────────
 

@@ -4,7 +4,26 @@
 # Ajuste o comportamento do bot sem tocar em código Python.
 # Variáveis de ambiente (TITAN_*) sobrescrevem valores deste arquivo.
 # ═══════════════════════════════════════════════════════════════════════════
+# ── Emulador: configuração fixa do LDPlayer ───────────────────────────────
+# NUNCA alterar estes valores — todo o projeto está calibrado para eles.
+# Se mudar resolução no LDPlayer, TODAS as coordenadas quebram.
+emulator:
+  resolution_w: 720
+  resolution_h: 1280
+  dpi: 320
+  fps: 60
+  rotation_auto: true
+  fix_window_size: false
+  # NUNCA usar "wm size" override — quebra input do Unity/PPPoker
+  wm_size_override: false
 
+# ── Input backend: LDPlayer (ADB touchscreen events) ────────────────────
+input:
+  backend: ldplayer
+  android_w: 720
+  android_h: 1280
+  adb_path: "F:\\LDPlayer\\LDPlayer9\\adb.exe"
+  adb_device: "emulator-5554"
 # ── Poker: estratégia e agressividade ─────────────────────────────────────
 poker:
   # Perfil da mesa: tight | normal | aggressive
@@ -76,13 +95,12 @@ vision:
   # Modo fail-fast: aborta se modelo não carregar
   fail_fast: false
 
-  # ROI manual de referência (útil para calibração visual em imagem estática)
-  # Não substitui automaticamente a ROI do emulador; serve como preset/documentação.
+  # ROI manual de referência (720x1280 — LDPlayer Celular DPI 320)
   roi:
     left: 0
     top: 0
-    width: 0
-    height: 0
+    width: 720
+    height: 1280
 
 # ── Visual Overlay: janela de debug "Visão do Exterminador" ──────────────
 overlay:
@@ -198,12 +216,12 @@ ghost_mouse:
   click_hold_mu: -2.7
   click_hold_sigma: 0.35
 
-# ── Botões de ação: coordenadas padrão ───────────────────────────────────
+# ── Botões de ação: coordenadas padrão (720x1280) ────────────────────────
 action_buttons:
-  fold: [600, 700]
-  call: [800, 700]
-  raise_small: [1000, 700]
-  raise_big: [1000, 700]
+  fold: [126, 1220]
+  call: [361, 1220]
+  raise_small: [596, 1220]
+  raise_big: [596, 1220]
 
 # ── Servidor ZMQ e Redis ─────────────────────────────────────────────────
 server:

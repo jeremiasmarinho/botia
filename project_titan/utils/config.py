@@ -71,9 +71,10 @@ class OCRRuntimeConfig:
     tesseract_cmd: str = field(default_factory=lambda: os.getenv("TITAN_TESSERACT_CMD", "").strip())
 
     # default ROIs (x, y, w, h) relative to emulator canvas
-    pot_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_POT_REGION", "360,255,180,54"))
-    stack_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_STACK_REGION", "330,610,220,56"))
-    call_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_CALL_REGION", "450,690,180,54"))
+    # Regiões OCR em coordenadas Android nativas 720x1280 (PPPoker PLO6)
+    pot_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_POT_REGION", "200,430,320,45"))
+    stack_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_STACK_REGION", "250,1105,250,35"))
+    call_region: str = field(default_factory=lambda: os.getenv("TITAN_OCR_CALL_REGION", "280,1135,200,30"))
     regions_file: str = field(default_factory=lambda: os.getenv("TITAN_OCR_REGIONS_FILE", os.path.join("reports", "ocr_regions_latest.json")).strip())
     regions_json: str = field(default_factory=lambda: os.getenv("TITAN_OCR_REGIONS_JSON", "").strip())
 
@@ -137,9 +138,9 @@ class OCRRuntimeConfig:
     def regions(self) -> dict[str, tuple[int, int, int, int]]:
         """Return effective OCR regions keyed by metric name."""
         default_regions = {
-            "pot": (360, 255, 180, 54),
-            "hero_stack": (330, 610, 220, 56),
-            "call_amount": (450, 690, 180, 54),
+            "pot": (200, 430, 320, 45),
+            "hero_stack": (250, 1105, 250, 35),
+            "call_amount": (280, 1135, 200, 30),
         }
         resolved_regions = dict(default_regions)
 

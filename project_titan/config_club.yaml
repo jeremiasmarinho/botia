@@ -8,6 +8,18 @@ poker:
   commitment_equity: 0.45
   simulations: 5000
   dynamic_simulations: true
+
+# ── Emulador: configuração fixa do LDPlayer ───────────────────────────────
+# NUNCA alterar — todo o projeto está calibrado para 720x1280 DPI 320.
+emulator:
+  resolution_w: 720
+  resolution_h: 1280
+  dpi: 320
+  fps: 60
+  rotation_auto: true
+  fix_window_size: false
+  wm_size_override: false
+
 vision:
   model_path: models/titan_v7_hybrid.pt
   confidence_threshold: 0.35
@@ -27,15 +39,15 @@ vision:
     height: 0
   regions:
     hero_area:
-      x: 321
-      y: 828
-      w: 166
-      h: 84
+      x: 130
+      y: 840
+      w: 460
+      h: 170
     board_area:
       x: 116
-      y: 411
-      w: 335
-      h: 95
+      y: 480
+      w: 490
+      h: 140
 overlay:
   enabled: false
   font_scale: 0.5
@@ -51,23 +63,25 @@ overlay:
 ocr:
   enabled: true
   use_easyocr: false
-  tesseract_cmd: ""
-  pot_region: 262,384,44,18
-  stack_region: 330,610,220,56
-  call_region: 450,690,180,54
+  tesseract_cmd: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+  # OCR regions em coordenadas Android nativas (720x1280).
+  # Ajustadas para PPPoker PLO6 portrait — info bar acima dos botões.
+  pot_region: 200,430,320,45
+  stack_region: 250,1105,250,35
+  call_region: 280,1135,200,30
   pot_min: 0.0
-  pot_max: 200000.0
+  pot_max: 500000.0
   stack_min: 0.0
   stack_max: 500000.0
   call_min: 0.0
-  call_max: 50000.0
+  call_max: 500000.0
   confirm_frames: 2
-  screen_stability_threshold: 0.01
+  screen_stability_threshold: 0.02
   pot_box:
-    x: 262
-    y: 384
-    w: 44
-    h: 18
+    x: 240
+    y: 300
+    w: 240
+    h: 50
 ghost_mouse:
   enabled: true
   control_point_spread: 0.35

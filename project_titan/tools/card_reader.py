@@ -128,11 +128,11 @@ class PPPokerCardReader:
     # These are the default pixel offsets.  Button Y is the average Y of
     # the detected fold / call / raise buttons.
     #
-    # From empirical PPPoker analysis on 1920×1080 (dual-table LDPlayer):
-    #   hero cards ≈ button_y − 200  to  button_y − 100
-    #   hero cards width ≈ 400px centred on midpoint of fold↔raise
-    _HERO_Y_OFFSET_TOP: int = -210      # above button_y
-    _HERO_Y_OFFSET_BOTTOM: int = -90    # above button_y
+    # From empirical PPPoker analysis on 720×1280 (LDPlayer portrait):
+    #   hero cards ≈ button_y − 420  to  button_y − 260
+    #   hero cards width ≈ 460px centred on midpoint of fold↔raise
+    _HERO_Y_OFFSET_TOP: int = -420      # above button_y
+    _HERO_Y_OFFSET_BOTTOM: int = -260   # above button_y
     _HERO_X_HALF_WIDTH: int = 230       # ± from table centre
 
     # -- Board card region geometry (relative to pot / estimated position) --
@@ -141,8 +141,8 @@ class PPPokerCardReader:
     _BOARD_Y_OFFSET_BOTTOM: int = 130   # below pot_y
     _BOARD_X_HALF_WIDTH: int = 230      # ± from pot centre
     # Fallback: if pot is not detected, estimate board position relative
-    # to buttons.  Board is approximately 500-600 px above the buttons.
-    _BOARD_FALLBACK_Y_OFFSET: int = -580  # above button_y
+    # to buttons.  Board is approximately 700-800 px above the buttons.
+    _BOARD_FALLBACK_Y_OFFSET: int = -750  # above button_y
 
     # -- Card segmentation thresholds --------------------------------------
     _BRIGHT_THRESHOLD: int = 200        # grayscale value to consider "bright"

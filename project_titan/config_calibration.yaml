@@ -1,12 +1,21 @@
 # Project Titan - Perfil Inicial de Calibracao
 # Objetivo: ponto de partida para alinhar geometria em menos de 2 minutos.
-# Base de referencia: layout full-HD (1920x1080).
+# Base de referencia: LDPlayer Celular 720x1280, DPI 320, 60 FPS.
 # Estrategia: ajustar apenas offset global (dx/dy) e, se preciso, pequenos refinos.
+#
+# ── Configuração fixa do LDPlayer ──────────────────────────────────────
+# Resolução: Celular → 720 x 1280 (DPI 320)
+# Janela: Rotação automática = ON, Fixar tamanho = OFF
+# FPS: Modo normal (60 FPS)
+# NUNCA usar "wm size" override — quebra o input do Unity.
+# ───────────────────────────────────────────────────────────────────────
 
 profile:
-  name: "calibration_quickstart_fhd"
-  reference_resolution: [1920, 1080]
-  notes: "Use como baseline; ajuste offset antes de mexer em largura/altura"
+  name: "calibration_720x1280_dpi320"
+  reference_resolution: [720, 1280]
+  dpi: 320
+  fps: 60
+  notes: "LDPlayer Celular 720x1280 DPI 320 — configuração fixa do projeto"
 
 # Offsets globais de calibracao manual (nao aplicados automaticamente pelo runtime)
 # Regra sugerida:
@@ -37,15 +46,16 @@ vision:
   roi:
     left: 0
     top: 0
-    width: 1920
-    height: 1080
+    width: 720
+    height: 1280
 
 ocr:
   enabled: true
   # x,y,w,h - caixas intencionalmente "apertadas" para reduzir ruido
-  pot_region: "900,245,120,42"
-  stack_region: "860,900,180,46"
-  call_region: "1055,930,145,44"
+  # Regiões calibradas para 720x1280 (LDPlayer Celular DPI 320)
+  pot_region: "262,384,44,18"
+  stack_region: "330,610,220,56"
+  call_region: "450,690,180,54"
 
   # guardrails anti-ruido
   pot_min: 0.0
@@ -56,19 +66,19 @@ ocr:
   call_max: 50000.0
 
 action_buttons:
-  # Pontos centrais de clique (mais seguros que borda)
-  fold: [860, 955]
-  call: [1010, 955]
-  raise_small: [1160, 955]
-  raise_big: [1310, 955]
+  # Pontos centrais de clique — 720x1280 (LDPlayer Celular DPI 320)
+  fold: [126, 1220]
+  call: [361, 1220]
+  raise_small: [596, 1220]
+  raise_big: [596, 1220]
 
 # Action Boxes de referencia para auditoria visual (80% do botao visual)
-# Ainda que o runtime atual clique por ponto, use estas caixas para validar margem.
+# Calibrados para 720x1280.
 action_boxes:
-  fold: [820, 925, 80, 48]
-  call: [970, 925, 80, 48]
-  raise_small: [1120, 925, 80, 48]
-  raise_big: [1270, 925, 80, 48]
+  fold: [50, 1190, 152, 60]
+  call: [280, 1190, 162, 60]
+  raise_small: [510, 1190, 172, 60]
+  raise_big: [510, 1190, 172, 60]
 
 # Formula manual para ajustar rapido com offset:
 # novo_x = x_base + calibration.offset_dx

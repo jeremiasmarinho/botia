@@ -1,39 +1,35 @@
-"""Ghost Mouse — movimento humanizado de cursor com curvas de Bézier.
+"""Ghost Mouse v3 — movimento humanizado + click injection multi-backend.
 
 Implementa o Ghost Protocol do Project Titan:
-  • Curvas de Bézier cúbicas (nunca move em linha reta).
-  • Injeção de ruído gaussiano (micro-arcos aleatórios).
-  • Velocidade variável por dificuldade da decisão (tweening).
-  • Coordenadas relativas à janela do emulador → absolutas na tela.
-  • Backend via PyAutoGUI para controle real do cursor.
-  • **Velocity curve** — ease-in/ease-out (aceleração natural no meio do
-    trajeto, desaceleração perto do alvo, como um humano real).
-  • **Micro-overshoots** — com probabilidade configurável, o cursor
-    ultrapassa o alvo em 5–12px e corrige (movimento humano natural).
-  • **Log-normal click hold** — tempo de pressionamento segue uma
-    distribuição log-normal (cauda longa → cliques longos ocasionais).
-  • **Poisson reaction delay** — tempo de "pensamento" baseado em
-    distribuição de Poisson, modulado pela equity/dificuldade.
-  • **Idle jitter** — micro-movimentos do mouse entre ações para
-    simular mão humana descansando no mouse.
+  - Curvas de Bezier cubicas (nunca move em linha reta).
+  - Injecao de ruido gaussiano (micro-arcos aleatorios).
+  - Velocidade variavel por dificuldade da decisao (tweening).
+  - Coordenadas relativas a janela do emulador -> absolutas na tela.
+  - **Velocity curve** — ease-in/ease-out.
+  - **Micro-overshoots** — cursor ultrapassa o alvo e corrige.
+  - **Log-normal click hold** — tempo de pressionamento realista.
+  - **Poisson reaction delay** — tempo de "pensamento" modulado.
+  - **Idle jitter** — micro-movimentos entre acoes.
 
-Segurança anti-detecção
-------------------------
-O movimento do mouse segue uma curva cúbica com 2 pontos de controle
-randômicos, ruído gaussiano por waypoint e hold-time variável no clique.
-A velocidade (ms/px) varia conforme a distância com perfil natural de
-aceleração, impedindo padrões lineares.
+Click Injection Backends (fallback chain, v3)
+----------------------------------------------
+O LDPlayer com PPPoker (Unity) rejeita varias fontes de input.
+A cadeia de fallback tenta, em ordem:
 
-Best-in-class click injection (v2)
------------------------------------
-  • **Persistent ADB shell** — keeps a single ``adb shell`` subprocess
-    alive and sends commands via stdin.  Eliminates the ~300 ms overhead
-    of spawning a new ``adb`` process per click (~10 ms latency).
-  • **Raw sendevent fallback** — writes kernel-level multi-touch protocol
-    B events directly to ``/dev/input/event2``.  Bypasses Android's
-    InputManager entirely for maximum reliability.
-  • **Fallback chain** — persistent shell → new subprocess → sendevent.
-  • **Thread-safe** — shared shell process guarded by ``threading.Lock``.
+  1. **Win32 SendMessage** — envia WM_LBUTTONDOWN/UP directamente ao
+     HWND do RenderWindow do LDPlayer.  O Unity nao consegue distinguir
+     isto de um clique fisico.  Funciona mesmo com janela em background.
+  2. **LDConsole API** — usa ``ldconsole.exe action --index N --key
+     call.input --value "X Y"`` que injeta via o motor do emulador,
+     bypassando completamente o Android guest.
+  3. **Persistent ADB shell** — ``input touchscreen tap`` via stdin de
+     um processo ``adb shell`` persistente (~10 ms latencia).
+  4. **ADB subprocess** — classic ``subprocess.run()`` (~300 ms).
+  5. **Raw sendevent** — multi-touch protocol B directo ao
+     ``/dev/input/event2`` com mapeamento correcto de eixos do
+     digitizer (descobertos via ``getevent -p``).
+
+All backends are thread-safe and self-recovering.
 """
 
 from __future__ import annotations
@@ -43,6 +39,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import math
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -85,36 +82,49 @@ class _POINT(ctypes.Structure):
 
 
 def _find_ldplayer_render_hwnd() -> int | None:
-    """Return the HWND of LDPlayer's RenderWindow, or *None*."""
+    """Return the HWND of LDPlayer's RenderWindow, or *None*.
+
+    Searches for the ``LDPlayerMainFrame`` top-level window and its
+    ``RenderWindow`` child.  Also checks ``TheRender`` and ``sub`` class
+    names used by newer LDPlayer versions.
+    """
     if _user32 is None:
         return None
 
     result: list[int] = []
+    _render_classes = {"RenderWindow", "TheRender", "sub"}
 
-    # noinspection PyUnusedLocal
     @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     def _enum_top(hwnd: int, _lp: int) -> bool:
         if not _user32.IsWindowVisible(hwnd):
             return True
         cname = ctypes.create_unicode_buffer(256)
         _user32.GetClassNameW(hwnd, cname, 256)
-        if cname.value == "LDPlayerMainFrame":
-            # Search children for RenderWindow
+        if cname.value in ("LDPlayerMainFrame", "LDPlayer"):
             @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
             def _enum_child(child: int, _lp2: int) -> bool:
                 cn2 = ctypes.create_unicode_buffer(256)
                 _user32.GetClassNameW(child, cn2, 256)
-                if cn2.value == "RenderWindow":
+                if cn2.value in _render_classes:
                     result.append(child)
-                    return False  # stop
+                    return False
                 return True
 
             _user32.EnumChildWindows(hwnd, _enum_child, 0)
             if result:
-                return False  # stop top enumeration
+                return False
         return True
 
     _user32.EnumWindows(_enum_top, 0)
+
+    # Fallback: if no child RenderWindow, try FindWindow for the main frame
+    if not result:
+        for cls in ("LDPlayerMainFrame", "LDPlayer"):
+            hwnd = _user32.FindWindowW(cls, None)
+            if hwnd:
+                result.append(hwnd)
+                break
+
     return result[0] if result else None
 
 
@@ -125,6 +135,209 @@ def _get_render_screen_rect(hwnd: int) -> tuple[int, int, int, int]:
     crect = wintypes.RECT()
     _user32.GetClientRect(hwnd, ctypes.byref(crect))
     return pt.x, pt.y, crect.right, crect.bottom
+
+
+# ---------------------------------------------------------------------------
+# Win32 click injection — SendMessage WM_LBUTTONDOWN/UP
+# ---------------------------------------------------------------------------
+
+_WM_LBUTTONDOWN = 0x0201
+_WM_LBUTTONUP = 0x0202
+_MK_LBUTTON = 0x0001
+
+
+def _win32_click_on_hwnd(
+    hwnd: int,
+    android_x: int,
+    android_y: int,
+    android_w: int = 720,
+    android_h: int = 1280,
+) -> bool:
+    """Inject a mouse click into *hwnd* via ``SendMessageW``.
+
+    Maps Android-native coordinates (720x1280) to the render window's
+    client area pixel coordinates, then sends ``WM_LBUTTONDOWN`` +
+    ``WM_LBUTTONUP`` directly to the HWND.
+
+    This approach bypasses the Android guest entirely and injects
+    hardware-level click events into LDPlayer's DirectX render surface.
+    Unity (PPPoker) cannot distinguish this from a physical mouse click.
+
+    Works even if the window is in the background (non-foreground).
+    """
+    if _user32 is None:
+        return False
+
+    # Get client rect dimensions
+    crect = wintypes.RECT()
+    _user32.GetClientRect(hwnd, ctypes.byref(crect))
+    client_w = crect.right
+    client_h = crect.bottom
+
+    if client_w <= 0 or client_h <= 0:
+        return False
+
+    # Map Android (720x1280) -> client pixel coordinates
+    px = int(android_x / android_w * client_w)
+    py = int(android_y / android_h * client_h)
+
+    # Clamp to client area
+    px = max(0, min(px, client_w - 1))
+    py = max(0, min(py, client_h - 1))
+
+    # LPARAM = (y << 16) | x
+    lparam = (py << 16) | (px & 0xFFFF)
+
+    # SendMessage is synchronous — guaranteed delivery
+    _user32.SendMessageW(hwnd, _WM_LBUTTONDOWN, _MK_LBUTTON, lparam)
+    time.sleep(uniform(0.035, 0.065))  # human-like hold
+    _user32.SendMessageW(hwnd, _WM_LBUTTONUP, 0, lparam)
+
+    return True
+
+
+def _win32_postmessage_click(
+    hwnd: int,
+    android_x: int,
+    android_y: int,
+    android_w: int = 720,
+    android_h: int = 1280,
+) -> bool:
+    """Fallback: PostMessage variant (non-blocking, less reliable)."""
+    if _user32 is None:
+        return False
+
+    crect = wintypes.RECT()
+    _user32.GetClientRect(hwnd, ctypes.byref(crect))
+    client_w = crect.right
+    client_h = crect.bottom
+    if client_w <= 0 or client_h <= 0:
+        return False
+
+    px = max(0, min(int(android_x / android_w * client_w), client_w - 1))
+    py = max(0, min(int(android_y / android_h * client_h), client_h - 1))
+    lparam = (py << 16) | (px & 0xFFFF)
+
+    _user32.PostMessageW(hwnd, _WM_LBUTTONDOWN, _MK_LBUTTON, lparam)
+    time.sleep(uniform(0.035, 0.065))
+    _user32.PostMessageW(hwnd, _WM_LBUTTONUP, 0, lparam)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# LDConsole click injection
+# ---------------------------------------------------------------------------
+
+_LDCONSOLE_PATHS = [
+    r"F:\LDPlayer\LDPlayer9\ldconsole.exe",
+    r"C:\LDPlayer\LDPlayer9\ldconsole.exe",
+    r"C:\Program Files\LDPlayer\LDPlayer9\ldconsole.exe",
+]
+
+
+def _find_ldconsole() -> str | None:
+    """Find the ldconsole.exe executable."""
+    custom = os.getenv("TITAN_LDCONSOLE_PATH", "").strip()
+    if custom and os.path.isfile(custom):
+        return custom
+    for p in _LDCONSOLE_PATHS:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _ldconsole_tap(
+    ldconsole_exe: str,
+    android_x: int,
+    android_y: int,
+    emu_index: int = 0,
+) -> bool:
+    """Tap via LDConsole host API (bypasses Android guest entirely).
+
+    Uses ``ldconsole.exe action --index <N> --key call.input --value "X Y"``
+    which injects the tap through the emulator's own DirectX/VirtIO pipeline.
+    This is the officially supported LDPlayer automation interface.
+    """
+    try:
+        result = subprocess.run(
+            [
+                ldconsole_exe,
+                "action",
+                "--index", str(emu_index),
+                "--key", "call.input",
+                "--value", f"{android_x} {android_y}",
+            ],
+            timeout=5,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Digitizer axis discovery (getevent -p)
+# ---------------------------------------------------------------------------
+
+def _discover_digitizer_axes(
+    adb_exe: str, device: str
+) -> tuple[int, int, int, int, str]:
+    """Query the kernel for actual ABS_MT_POSITION_X/Y axis limits.
+
+    Returns:
+        (x_min, x_max, y_min, y_max, event_device_path)
+
+    Defaults to (0, 1279, 0, 719, "/dev/input/event2") if discovery fails.
+    In LDPlayer the digitizer is rotated 90 degrees:
+      - ABS_MT_POSITION_X range [0, 1279] maps to display Y (portrait).
+      - ABS_MT_POSITION_Y range [0,  719] maps to display X (portrait).
+    """
+    try:
+        result = subprocess.run(
+            [adb_exe, "-s", device, "shell", "getevent", "-p"],
+            capture_output=True, text=True, timeout=8,
+        )
+        raw = result.stdout
+    except Exception:
+        return (0, 1279, 0, 719, "/dev/input/event2")
+
+    # Parse devices looking for one with ABS_MT_POSITION_X
+    current_dev = ""
+    axes: dict[str, tuple[int, int]] = {}
+    best_dev = "/dev/input/event2"
+
+    for line in raw.splitlines():
+        dm = re.match(r"^add device \d+:\s*(.+)", line)
+        if dm:
+            if "ABS_MT_POSITION_X" in axes:
+                best_dev = current_dev
+                break
+            current_dev = dm.group(1).strip()
+            axes = {}
+            continue
+
+        # Match: "  0035  : value 0, min 0, max 1279, ..."
+        # or:    "  ABS_MT_POSITION_X : value 0, min 0, max 1279, ..."
+        am = re.match(
+            r"\s+(ABS_MT_POSITION_[XY]|0035|0036)\s*:\s*"
+            r"value\s+\d+,\s*min\s+(\d+),\s*max\s+(\d+)",
+            line,
+        )
+        if am:
+            tag = am.group(1)
+            if tag in ("0035", "ABS_MT_POSITION_X"):
+                tag = "ABS_MT_POSITION_X"
+            else:
+                tag = "ABS_MT_POSITION_Y"
+            axes[tag] = (int(am.group(2)), int(am.group(3)))
+
+    if "ABS_MT_POSITION_X" in axes:
+        best_dev = current_dev
+
+    x_min, x_max = axes.get("ABS_MT_POSITION_X", (0, 1279))
+    y_min, y_max = axes.get("ABS_MT_POSITION_Y", (0, 719))
+    return (x_min, x_max, y_min, y_max, best_dev)
 
 
 # ---------------------------------------------------------------------------
@@ -247,33 +460,50 @@ class PersistentADBShell:
             f"input touchscreen swipe {x1} {y1} {x2} {y2} {dur_ms}"
         )
 
-    def sendevent_tap(self, x: int, y: int, device: str = "/dev/input/event2") -> bool:
+    def sendevent_tap(
+        self,
+        x: int,
+        y: int,
+        device: str = "/dev/input/event2",
+        *,
+        display_w: int = 720,
+        display_h: int = 1280,
+        axis_x_max: int = 1279,
+        axis_y_max: int = 719,
+    ) -> bool:
         """Send a raw multi-touch-B tap via ``sendevent`` through the shell.
 
         This writes directly to the kernel input device, bypassing
-        Android's InputManager.  The coordinate transform maps display
-        coordinates (portrait 720×1280) → kernel touch axes:
-          - ABS_MT_POSITION_X (code 0x35) : range 0–1279 (display Y)
-          - ABS_MT_POSITION_Y (code 0x36) : range 0–719  (display X)
+        Android's InputManager.
 
-        Transform: touch_x = display_y, touch_y = display_x
+        **Critical axis mapping (LDPlayer VirtIO digitizer):**
+        The digitizer is rotated 90 degrees from the display:
+          - ABS_MT_POSITION_X (code 0x35): range [0, axis_x_max]
+            maps to **display Y** (portrait axis).
+          - ABS_MT_POSITION_Y (code 0x36): range [0, axis_y_max]
+            maps to **display X** (portrait axis).
 
-        Protocol B sequence (slot-based):
-          DOWN: SLOT(0) → TRACKING_ID(1) → POS_X → POS_Y → PRESSURE(1)
-                → BTN_TOUCH(1) → BTN_TOOL_FINGER(1) → SYN_REPORT
-          UP:   SLOT(0) → TRACKING_ID(-1) → BTN_TOUCH(0) → BTN_TOOL_FINGER(0)
-                → SYN_REPORT
+        The correct interpolation formula is:
+          touch_x = int(display_y / display_h * axis_x_max)
+          touch_y = int(display_x / display_w * axis_y_max)
+
+        These values were discovered empirically via ``getevent -p``
+        (see ``scripts/diag_getevent.py``).
+
+        Protocol B sequence:
+          DOWN: SLOT(0) -> TRACKING_ID(1) -> POS_X -> POS_Y -> PRESSURE(1)
+                -> BTN_TOUCH(1) -> BTN_TOOL_FINGER(1) -> SYN_REPORT
+          UP:   SLOT(0) -> TRACKING_ID(-1) -> BTN_TOUCH(0)
+                -> BTN_TOOL_FINGER(0) -> SYN_REPORT
         """
-        # EV_ABS=3, EV_KEY=1, EV_SYN=0
-        # ABS_MT_SLOT=0x2f(47), ABS_MT_TRACKING_ID=0x39(57)
-        # ABS_MT_POSITION_X=0x35(53), ABS_MT_POSITION_Y=0x36(54)
-        # ABS_MT_PRESSURE=0x3a(58)
-        # BTN_TOUCH=0x14a(330), BTN_TOOL_FINGER=0x145(325)
-        # SYN_REPORT=0
+        # ---- Interpolation: display coords -> digitizer axes ----
+        # Swap + scale: display_y -> touch X axis, display_x -> touch Y axis
+        touch_x = int(y / display_h * axis_x_max)
+        touch_y = int(x / display_w * axis_y_max)
 
-        # Coordinate transform: display (x, y) → touch axes (y, x)
-        touch_x = y   # display Y → kernel ABS_MT_POSITION_X (0–1279)
-        touch_y = x   # display X → kernel ABS_MT_POSITION_Y (0–719)
+        # Clamp to valid ranges
+        touch_x = max(0, min(touch_x, axis_x_max))
+        touch_y = max(0, min(touch_y, axis_y_max))
 
         d = device
         down_cmds = (
@@ -487,12 +717,6 @@ class GhostMouse:
         self.config = config or GhostMouseConfig()
 
         # ── Input backend selection ─────────────────────────────────
-        # TITAN_INPUT_BACKEND=ldplayer → ADB touchscreen tap via a
-        #   *persistent* ADB shell (best-in-class ~10 ms latency).
-        #   Fallback: new subprocess per click (~300 ms).
-        #   Secondary fallback: raw sendevent to kernel input device.
-        # TITAN_INPUT_BACKEND=adb  → same persistent shell for generic ADB.
-        # TITAN_INPUT_BACKEND=pyautogui (default) → legacy PyAutoGUI.
         self._input_backend = os.getenv(
             "TITAN_INPUT_BACKEND", "pyautogui"
         ).strip().lower()
@@ -510,8 +734,21 @@ class GhostMouse:
         # Persistent ADB shell (initialised lazily on first click)
         self._persistent_shell: PersistentADBShell | None = None
 
+        # LDConsole path (discovered lazily)
+        self._ldconsole_exe: str | None = None
+        self._ldconsole_emu_index: int = 0
+
+        # Digitizer axis limits (discovered from getevent -p)
+        self._digitizer_x_max: int = 1279
+        self._digitizer_y_max: int = 719
+        self._digitizer_device: str = "/dev/input/event2"
+        self._digitizer_discovered: bool = False
+
         # Click statistics for monitoring
         self._click_stats = {
+            "win32_sendmessage": 0,
+            "win32_postmessage": 0,
+            "ldconsole_ok": 0,
             "persistent_ok": 0,
             "subprocess_fallback": 0,
             "sendevent_fallback": 0,
@@ -530,13 +767,21 @@ class GhostMouse:
             self._ld_render_hwnd = _find_ldplayer_render_hwnd()
             self._ld_android_w = int(os.getenv("TITAN_ANDROID_W", "720"))
             self._ld_android_h = int(os.getenv("TITAN_ANDROID_H", "1280"))
+            self._ldconsole_exe = _find_ldconsole()
+            self._ldconsole_emu_index = int(os.getenv("TITAN_LDCONSOLE_INDEX", "0"))
             self._enabled = os.getenv(
                 "TITAN_GHOST_MOUSE", "0"
             ).strip().lower() in {"1", "true", "yes", "on"}
+
+            # Discover digitizer axes in background (don't block init)
+            self._discover_digitizer_async()
+
             self._log.info(
-                f"LDPlayer backend: render_hwnd={self._ld_render_hwnd} "
+                f"LDPlayer backend v3: "
+                f"render_hwnd={self._ld_render_hwnd} "
                 f"android={self._ld_android_w}x{self._ld_android_h} "
                 f"adb={self._adb_exe} device={self._adb_device} "
+                f"ldconsole={self._ldconsole_exe} "
                 f"enabled={self._enabled}"
             )
         elif self._input_backend == "adb":
@@ -563,6 +808,35 @@ class GhostMouse:
             self._persistent_shell.stop()
             self._persistent_shell = None
         self._log.info("GhostMouse shutdown complete")
+
+    def _discover_digitizer_async(self) -> None:
+        """Discover the digitizer axis limits from ``getevent -p``.
+
+        Runs in a daemon thread so it doesn't block initialization.
+        The results are used by ``sendevent_tap`` for correct axis
+        interpolation.  If discovery fails, defaults are used.
+        """
+        def _worker():
+            try:
+                x_min, x_max, y_min, y_max, dev = _discover_digitizer_axes(
+                    self._adb_exe, self._adb_device
+                )
+                self._digitizer_x_max = x_max
+                self._digitizer_y_max = y_max
+                self._digitizer_device = dev
+                self._digitizer_discovered = True
+                self._log.info(
+                    f"Digitizer discovered: "
+                    f"X=[0,{x_max}] Y=[0,{y_max}] "
+                    f"device={dev}"
+                )
+            except Exception as exc:
+                self._log.warning(
+                    f"Digitizer discovery failed (using defaults): {exc}"
+                )
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
 
     def get_click_stats(self) -> dict[str, int]:
         """Return a copy of the click method usage statistics."""
@@ -911,22 +1185,23 @@ class GhostMouse:
         return self._persistent_shell
 
     def _execute_ldplayer_click(self, point: ClickPoint, pre_delay: float = 0.0) -> None:
-        """Click inside LDPlayer via best-in-class fallback chain.
+        """Click inside LDPlayer via 5-strategy fallback chain.
 
-        Fallback order (fastest → most reliable):
-          1. **Persistent ADB shell** — ``input touchscreen tap`` piped
+        Fallback order (most reliable for Unity/PPPoker first):
+
+          1. **Win32 SendMessage** -- sends WM_LBUTTONDOWN/UP directly
+             to the RenderWindow HWND.  Unity cannot distinguish this
+             from a physical mouse click.  Works in background.
+          2. **LDConsole API** -- ``ldconsole.exe action --index N --key
+             call.input --value "X Y"``.  Injects via the emulator's
+             own host pipeline, bypassing Android entirely.
+          3. **Persistent ADB shell** -- ``input touchscreen tap`` piped
              via stdin to a long-lived ``adb shell`` process (~10 ms).
-          2. **New subprocess** — classic ``subprocess.run()`` (~300 ms).
-          3. **Raw sendevent** — kernel-level multi-touch events written
-             to ``/dev/input/event2`` via the persistent shell.
+          4. **New subprocess** -- classic ``subprocess.run()`` (~300 ms).
+          5. **Raw sendevent** -- kernel-level multi-touch events with
+             correct axis interpolation to ``/dev/input/event2``.
 
-        At native 720×1280 resolution (without ``wm size`` override),
-        ``input touchscreen tap`` successfully reaches PPPoker's Unity
-        engine.  The ``wm size`` override to 1080×1920 **must not** be
-        active: it breaks both physical clicks and reverses which ADB
-        input source Unity accepts.
-
-        Coordinates are in Android native resolution (720×1280).
+        Coordinates are in Android native resolution (720x1280).
         """
         if pre_delay > 0:
             time.sleep(pre_delay)
@@ -935,7 +1210,77 @@ class GhostMouse:
         tx = int(point.x + gauss(0, jitter))
         ty = int(point.y + gauss(0, jitter))
 
-        # ── Strategy 1: persistent shell (fastest, ~10 ms) ──────────
+        # ── Strategy 1: Win32 SendMessage (nuclear, most reliable) ──
+        if self._ld_render_hwnd is not None:
+            try:
+                if _win32_click_on_hwnd(
+                    self._ld_render_hwnd, tx, ty,
+                    self._ld_android_w, self._ld_android_h,
+                ):
+                    self._click_stats["win32_sendmessage"] += 1
+                    self._log.info(
+                        f"ldplayer click ({tx},{ty}) via Win32 SendMessage "
+                        f"hwnd={self._ld_render_hwnd:#x} "
+                        f"[stats: sm={self._click_stats['win32_sendmessage']}]"
+                    )
+                    return
+            except Exception as exc:
+                self._log.warning(f"Win32 SendMessage failed: {exc}")
+
+            # Try PostMessage as Win32 fallback
+            try:
+                if _win32_postmessage_click(
+                    self._ld_render_hwnd, tx, ty,
+                    self._ld_android_w, self._ld_android_h,
+                ):
+                    self._click_stats["win32_postmessage"] += 1
+                    self._log.info(
+                        f"ldplayer click ({tx},{ty}) via Win32 PostMessage "
+                        f"[stats: pm={self._click_stats['win32_postmessage']}]"
+                    )
+                    return
+            except Exception as exc:
+                self._log.warning(f"Win32 PostMessage failed: {exc}")
+        else:
+            # Try to rediscover the HWND (window might have been created after init)
+            self._ld_render_hwnd = _find_ldplayer_render_hwnd()
+            if self._ld_render_hwnd is not None:
+                self._log.info(
+                    f"Late-discovered LDPlayer HWND: {self._ld_render_hwnd:#x}"
+                )
+                # Retry with the newly found HWND
+                try:
+                    if _win32_click_on_hwnd(
+                        self._ld_render_hwnd, tx, ty,
+                        self._ld_android_w, self._ld_android_h,
+                    ):
+                        self._click_stats["win32_sendmessage"] += 1
+                        self._log.info(
+                            f"ldplayer click ({tx},{ty}) via Win32 SendMessage (late HWND)"
+                        )
+                        return
+                except Exception:
+                    pass
+
+        # ── Strategy 2: LDConsole API (host-side bypass) ────────────
+        if self._ldconsole_exe:
+            try:
+                if _ldconsole_tap(
+                    self._ldconsole_exe, tx, ty,
+                    self._ldconsole_emu_index,
+                ):
+                    self._click_stats["ldconsole_ok"] += 1
+                    self._log.info(
+                        f"ldplayer click ({tx},{ty}) via ldconsole "
+                        f"[stats: ldc={self._click_stats['ldconsole_ok']}]"
+                    )
+                    return
+                else:
+                    self._log.warning("ldconsole tap returned non-zero exit code")
+            except Exception as exc:
+                self._log.warning(f"ldconsole tap failed: {exc}")
+
+        # ── Strategy 3: persistent shell (fastest ADB, ~10 ms) ──────
         shell = self._ensure_persistent_shell()
         if shell.tap(tx, ty):
             self._click_stats["persistent_ok"] += 1
@@ -945,9 +1290,9 @@ class GhostMouse:
             )
             return
 
-        # ── Strategy 2: new subprocess fallback (~300 ms) ───────────
+        # ── Strategy 4: new subprocess fallback (~300 ms) ───────────
         self._log.warning(
-            f"persistent shell unavailable — falling back to subprocess"
+            f"persistent shell unavailable -- falling back to subprocess"
         )
         try:
             subprocess.run(
@@ -964,21 +1309,33 @@ class GhostMouse:
         except Exception as exc:
             self._log.warning(f"subprocess tap also failed: {exc}")
 
-        # ── Strategy 3: raw sendevent (kernel bypass) ───────────────
+        # ── Strategy 5: raw sendevent (kernel bypass with axis interp) ──
         self._log.warning("trying sendevent fallback (kernel bypass)")
         shell = self._ensure_persistent_shell()
-        if shell.sendevent_tap(tx, ty):
+        if shell.sendevent_tap(
+            tx, ty,
+            device=self._digitizer_device,
+            display_w=self._ld_android_w,
+            display_h=self._ld_android_h,
+            axis_x_max=self._digitizer_x_max,
+            axis_y_max=self._digitizer_y_max,
+        ):
             self._click_stats["sendevent_fallback"] += 1
             self._log.info(
-                f"ldplayer click ({tx},{ty}) via sendevent fallback"
+                f"ldplayer click ({tx},{ty}) via sendevent "
+                f"(touch_x={int(ty / self._ld_android_h * self._digitizer_x_max)}, "
+                f"touch_y={int(tx / self._ld_android_w * self._digitizer_y_max)})"
             )
             return
 
         # ── All strategies exhausted ────────────────────────────────
         self._click_stats["total_failures"] += 1
         self._log.error(
-            f"ALL click strategies failed at ({tx},{ty}) "
-            f"[failures={self._click_stats['total_failures']}]"
+            f"ALL 5 click strategies failed at ({tx},{ty}) "
+            f"[failures={self._click_stats['total_failures']}] "
+            f"hwnd={self._ld_render_hwnd} "
+            f"ldconsole={self._ldconsole_exe} "
+            f"adb={self._adb_exe}"
         )
 
     def swipe(
@@ -997,7 +1354,7 @@ class GhostMouse:
 
         On the ``pyautogui`` backend it uses a Bézier-smoothed drag.
 
-        Coordinates are in **Android virtual resolution** (e.g. 1080×1920).
+        Coordinates are in **Android native resolution** (720×1280).
 
         Args:
             start:       Start coordinate of the swipe.

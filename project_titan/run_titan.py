@@ -157,6 +157,99 @@ def check_emulator(title_pattern: str) -> bool:
         return False
 
 
+# ── Emulator configuration spec (fixed) ──────────────────────────────────
+_EXPECTED_W = 720
+_EXPECTED_H = 1280
+_EXPECTED_DPI = 320
+
+
+def check_emulator_resolution() -> bool:
+    """Validate the emulator is running at the expected 720x1280 DPI 320.
+
+    Queries ``adb shell wm size`` and ``adb shell wm density`` to verify
+    the Android virtual display matches our fixed configuration.
+
+    Returns:
+        ``True`` if resolution and density match expectations.
+    """
+    adb = os.getenv("TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe")
+    device = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
+
+    ok = True
+
+    # ── Check resolution ────────────────────────────────────────────
+    try:
+        res = subprocess.run(
+            [adb, "-s", device, "shell", "wm", "size"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = res.stdout.strip()
+        # "Physical size: 720x1280" or "Physical size: 720x1280\nOverride size: ..."
+        lines = output.splitlines()
+        physical = None
+        override = None
+        for line in lines:
+            if "Override" in line:
+                override = line.split(":")[-1].strip()
+            elif "Physical" in line:
+                physical = line.split(":")[-1].strip()
+
+        if override:
+            _log("ERROR", (
+                f"{_RED}WM SIZE OVERRIDE DETECTADO: {override}{_RESET}\n"
+                f"         O override QUEBRA o input do Unity/PPPoker!\n"
+                f"         Execute: adb -s {device} shell wm size reset"
+            ))
+            ok = False
+        elif physical:
+            expected = f"{_EXPECTED_W}x{_EXPECTED_H}"
+            if physical != expected:
+                _log("ERROR", (
+                    f"{_RED}Resolução incorreta: {physical} (esperado {expected}){_RESET}\n"
+                    f"         Altere no LDPlayer: Configuração → Tela → Celular → 720x1280 (DPI 320)"
+                ))
+                ok = False
+            else:
+                _log("OK", f"Resolução: {_GREEN}{physical}{_RESET}")
+        else:
+            _log("WARN", f"Não foi possível ler wm size: {output}")
+    except Exception as exc:
+        _log("WARN", f"Falha ao verificar resolução via ADB: {exc}")
+
+    # ── Check density/DPI ───────────────────────────────────────────
+    try:
+        res = subprocess.run(
+            [adb, "-s", device, "shell", "wm", "density"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = res.stdout.strip()
+        lines = output.splitlines()
+        density = None
+        for line in lines:
+            if "Physical" in line or "density" in line.lower():
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    try:
+                        density = int(parts[-1].strip())
+                    except ValueError:
+                        pass
+
+        if density is not None:
+            if density != _EXPECTED_DPI:
+                _log("WARN", (
+                    f"DPI: {density} (esperado {_EXPECTED_DPI}) — "
+                    f"pode afetar precisão do OCR"
+                ))
+            else:
+                _log("OK", f"DPI: {_GREEN}{density}{_RESET}")
+        else:
+            _log("WARN", f"Não foi possível ler wm density: {output}")
+    except Exception as exc:
+        _log("WARN", f"Falha ao verificar DPI via ADB: {exc}")
+
+    return ok
+
+
 def check_dependencies() -> bool:
     """Verifica se as dependências críticas estão instaladas."""
     required = {
@@ -424,6 +517,19 @@ def main() -> int:
     emulator_ok = check_emulator(emulator_title)
     if not emulator_ok:
         _log("WARN", "Emulador não encontrado — agente rodará em modo simulação")
+
+    # Verificar resolução ADB (720x1280, DPI 320, sem wm size override)
+    resolution_ok = check_emulator_resolution()
+    if not resolution_ok:
+        _log("ERROR", (
+            f"{_RED}Resolução do emulador INCORRETA!{_RESET}\n"
+            "         Configure no LDPlayer:\n"
+            "           Tela → Celular → 720 x 1280 (DPI 320)\n"
+            "           60 FPS, Rotação automática ON, Fixar tamanho OFF\n"
+            "         Se houver wm size override, execute:\n"
+            "           adb shell wm size reset"
+        ))
+        return 1
     print()
 
     # Monta variáveis de ambiente para os subprocessos
@@ -451,6 +557,64 @@ def main() -> int:
                             break
                 except Exception:
                     pass
+
+    # ── Bridge OCR config from YAML → environment ───────────────────
+    # OCRRuntimeConfig reads from env vars; here we load settings from
+    # config_club.yaml so the agent subprocess picks them up.
+    _ocr_yaml_loaded = False
+    for cfg_name in ("config_club.yaml", "config.yaml"):
+        cfg_path = os.path.join(project_dir, cfg_name)
+        if os.path.isfile(cfg_path) and _yaml is not None:
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as _f:
+                    _cfg = _yaml.safe_load(_f)
+                if isinstance(_cfg, dict):
+                    _ocr = _cfg.get("ocr", {})
+                    if isinstance(_ocr, dict):
+                        _env_map = {
+                            "pot_region":    "TITAN_OCR_POT_REGION",
+                            "stack_region":  "TITAN_OCR_STACK_REGION",
+                            "call_region":   "TITAN_OCR_CALL_REGION",
+                            "tesseract_cmd": "TITAN_TESSERACT_CMD",
+                            "use_easyocr":   "TITAN_OCR_USE_EASYOCR",
+                            "enabled":       "TITAN_OCR_ENABLED",
+                            "pot_min":       "TITAN_OCR_POT_MIN",
+                            "pot_max":       "TITAN_OCR_POT_MAX",
+                            "stack_min":     "TITAN_OCR_STACK_MIN",
+                            "stack_max":     "TITAN_OCR_STACK_MAX",
+                            "call_min":      "TITAN_OCR_CALL_MIN",
+                            "call_max":      "TITAN_OCR_CALL_MAX",
+                        }
+                        for yaml_key, env_key in _env_map.items():
+                            val = _ocr.get(yaml_key)
+                            if val is not None and str(val).strip():
+                                env[env_key] = str(val).strip()
+                        _ocr_yaml_loaded = True
+                        break
+            except Exception:
+                pass
+
+    # Auto-detect Tesseract binary if not set
+    if not env.get("TITAN_TESSERACT_CMD"):
+        _tess_default = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if os.path.isfile(_tess_default):
+            env["TITAN_TESSERACT_CMD"] = _tess_default
+            _log("OK", f"Tesseract detectado: {_tess_default}")
+        else:
+            import shutil
+            _tess_which = shutil.which("tesseract")
+            if _tess_which:
+                env["TITAN_TESSERACT_CMD"] = _tess_which
+                _log("OK", f"Tesseract detectado: {_tess_which}")
+            else:
+                _log("WARN", "Tesseract NÃO encontrado — OCR ficará desabilitado!")
+    else:
+        _log("OK", f"Tesseract: {env['TITAN_TESSERACT_CMD']}")
+
+    # Card reader: enable debug for first run diagnostics
+    env.setdefault("TITAN_CARD_READER_DEBUG", "1")
+    env.setdefault("TITAN_CARD_READER_HERO_OFFSET_Y_TOP", "-420")
+    env.setdefault("TITAN_CARD_READER_HERO_OFFSET_Y_BOTTOM", "-260")
 
     # ══════════════════════════════════════════════════════════════════
     # ETAPA 4/5: Iniciar HiveBrain (thread)

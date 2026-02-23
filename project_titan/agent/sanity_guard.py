@@ -21,8 +21,8 @@ class SanityGuard:
         history_size: int = 5,
         stable_frames: int = 3,
         repeat_decimals: int = 2,
-        pot_drop_tolerance: float = 0.50,
-        new_hand_pot_threshold: float = 1.0,
+        pot_drop_tolerance: float = 10.0,
+        new_hand_pot_threshold: float = 10.0,
     ) -> None:
         self.history_size = max(3, int(history_size))
         self.stable_frames = max(2, int(stable_frames))

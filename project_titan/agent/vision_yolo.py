@@ -720,6 +720,44 @@ class VisionYolo:
         except Exception:
             return None
 
+    # -- Captura via ADB (conteúdo real do Android, imune a oclusão) ---------
+
+    def capture_frame_adb(self) -> Any:
+        """Captura a tela via ADB ``screencap``.
+
+        Diferente de :meth:`capture_frame` (que usa ``mss`` e depende da
+        janela estar visível no desktop), este método obtém o conteúdo
+        real da tela Android via ADB — funciona mesmo se o LDPlayer
+        estiver coberto por outras janelas.
+
+        Retorna um array numpy BGR (H×W×3) em resolução nativa Android
+        (ex.: 720×1280) ou ``None`` se falhar.
+        """
+        import subprocess as _sp
+        import io as _io
+
+        adb_exe = os.getenv("TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe")
+        adb_dev = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
+
+        try:
+            r = _sp.run(
+                [adb_exe, "-s", adb_dev, "exec-out", "screencap", "-p"],
+                capture_output=True,
+                timeout=5,
+            )
+            if r.returncode != 0 or len(r.stdout) < 100:
+                return None
+
+            from PIL import Image  # type: ignore[import-untyped]
+
+            img = Image.open(_io.BytesIO(r.stdout)).convert("RGB")
+            if np is None:
+                return None
+            # PIL retorna RGB; converter para BGR (padrão OpenCV)
+            return np.array(img)[:, :, ::-1].copy()
+        except Exception:
+            return None
+
     # -- Inferência YOLO ----------------------------------------------------
 
     def detect(self) -> DetectionFrame:

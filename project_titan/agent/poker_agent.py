@@ -133,11 +133,25 @@ class PokerAgent:
 
         # OCR pipeline (pot / stack / call)
         self.ocr_config = OCRRuntimeConfig()
+
+        # Auto-detect Tesseract if not configured
+        _tess_cmd = self.ocr_config.tesseract_cmd or None
+        if not _tess_cmd:
+            import shutil
+            _tess_default = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.isfile(_tess_default):
+                _tess_cmd = _tess_default
+            elif shutil.which("tesseract"):
+                _tess_cmd = shutil.which("tesseract")
+
         self.ocr = TitanOCR(
             use_easyocr=self.ocr_config.use_easyocr,
-            tesseract_cmd=self.ocr_config.tesseract_cmd or None,
+            tesseract_cmd=_tess_cmd,
         )
         self.ocr_vision = VisionYolo(model_path=vision_config.model_path)
+        # Reference Android resolution for OCR region scaling
+        self._ocr_ref_w = int(os.getenv("TITAN_OCR_REF_W", "720"))
+        self._ocr_ref_h = int(os.getenv("TITAN_OCR_REF_H", "1280"))
         self._ocr_last_values: dict[str, float] = {
             "pot": 0.0,
             "hero_stack": 0.0,
@@ -235,15 +249,35 @@ class PokerAgent:
         return self._read_ocr_metrics_from_frame(frame)
 
     def _read_ocr_metrics_from_frame(self, frame: Any) -> dict[str, float]:
-        """Read OCR metrics from a pre-captured frame."""
+        """Read OCR metrics from a pre-captured frame.
+
+        If the frame dimensions differ from the reference OCR region
+        coordinate system (``_ocr_ref_w`` x ``_ocr_ref_h``), regions
+        are auto-scaled proportionally.
+        """
         if frame is None:
             return dict(self._ocr_last_values)
 
         regions = self.ocr_config.regions()
         updated = dict(self._ocr_last_values)
 
+        # Auto-scale regions if frame size differs from reference
+        try:
+            frame_h, frame_w = frame.shape[:2]
+        except Exception:
+            frame_h, frame_w = self._ocr_ref_h, self._ocr_ref_w
+
+        sx = frame_w / self._ocr_ref_w if self._ocr_ref_w > 0 else 1.0
+        sy = frame_h / self._ocr_ref_h if self._ocr_ref_h > 0 else 1.0
+
         for key, region in regions.items():
-            crop = self._crop_region(frame, region)
+            x, y, w, h = region
+            if abs(sx - 1.0) > 0.02 or abs(sy - 1.0) > 0.02:
+                x = int(x * sx)
+                y = int(y * sy)
+                w = int(w * sx)
+                h = int(h * sy)
+            crop = self._crop_region(frame, (x, y, w, h))
             value = self.ocr.read_numeric_region(
                 crop,
                 key=key,
@@ -542,17 +576,32 @@ class PokerAgent:
             self._overlay.start()
 
         cycle = 0
+        _toggle_log_counter = 0
         while True:
             # Skip cycle when automation is paused
             if not toggle.is_active:
+                _toggle_log_counter += 1
+                if _toggle_log_counter == 1 or _toggle_log_counter % 10 == 0:
+                    _log.info(
+                        f"Toggle automação: OFF — pressione {toggle._hotkey} para ativar "
+                        f"(aguardando há {_toggle_log_counter} ciclos)"
+                    )
                 time.sleep(max(0.5, float(self.config.interval_seconds)))
                 continue
+            # Reset counter when active
+            if _toggle_log_counter > 0:
+                _log.highlight(f"Toggle automação: ON — iniciando ciclos de jogo")
+                _toggle_log_counter = 0
             cycle_started_at = time.perf_counter()
             cycle_id = cycle + 1
             snapshot = self.vision.read_table()
             self._log_seen_cards(_log, list(getattr(snapshot, "hero_cards", [])))
 
-            current_ocr_frame = self.ocr_vision.capture_frame()
+            # Use ADB screencap instead of mss — immune to window occlusion
+            current_ocr_frame = self.ocr_vision.capture_frame_adb()
+            if current_ocr_frame is None:
+                # fallback to mss if ADB fails
+                current_ocr_frame = self.ocr_vision.capture_frame()
 
             # Overlay: atualiza frame e snapshot
             if self._overlay is not None:
@@ -584,6 +633,17 @@ class PokerAgent:
                 ocr_pot = float(ocr_metrics.get("pot", 0.0))
                 ocr_stack = float(ocr_metrics.get("hero_stack", 0.0))
                 ocr_call = float(ocr_metrics.get("call_amount", 0.0))
+
+                # Diagnostic logging on first 5 cycles
+                if cycle < 5:
+                    fh, fw = current_ocr_frame.shape[:2]
+                    _tess_ok = self.ocr._pytesseract is not None
+                    _log.info(
+                        f"[OCR_DIAG] frame={fw}x{fh} "
+                        f"pot={ocr_pot:.2f} stack={ocr_stack:.2f} call={ocr_call:.2f} "
+                        f"regions={self.ocr_config.regions()} "
+                        f"tesseract_loaded={_tess_ok}"
+                    )
 
                 if not self.sanity_guard.validate(ocr_pot, ocr_stack, ocr_call):
                     _log.info(
