@@ -358,7 +358,7 @@ def main() -> int:
     # Resolve paths
     project_dir = os.path.dirname(os.path.abspath(__file__))
     python = find_python()
-    redis_url = args.redis or os.getenv("TITAN_REDIS_URL", "redis://127.0.0.1:6379/0")
+    redis_url = args.redis or os.getenv("TITAN_REDIS_URL", "redis://:titan_secret@127.0.0.1:6379/0")
     zmq_bind = args.zmq_bind or os.getenv("TITAN_ZMQ_BIND", "tcp://0.0.0.0:5555")
     emulator_title = args.emulator or os.getenv("TITAN_EMULATOR_TITLE", "LDPlayer")
 
@@ -493,6 +493,7 @@ def main() -> int:
     _log("OK", f"{_GREEN}{_BOLD}  Agentes: {args.agents}{_RESET}")
     _log("OK", f"{_GREEN}{_BOLD}{'=' * 50}{_RESET}")
     _log("INFO", "Pressione Ctrl+C para encerrar todos os processos.")
+    _log("INFO", f"{_YELLOW}Pressione F7 para ATIVAR/DESATIVAR automação.{_RESET}")
     print()
 
     try:

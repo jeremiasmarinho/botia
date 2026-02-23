@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "titan_secret"]
     volumes:
       - redis-data:/data
 

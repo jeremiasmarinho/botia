@@ -528,12 +528,25 @@ class PokerAgent:
             f"table={self.config.table_id}  memory={self.memory.backend}"
         )
 
+        # ── Automation toggle (F7) ─────────────────────────────────
+        from agent.automation_toggle import AutomationToggle
+        toggle = AutomationToggle()
+        toggle.start()
+        _log.info(
+            f"Toggle automação: {'ON' if toggle.is_active else 'OFF'} "
+            f"— pressione {toggle._hotkey} para alternar"
+        )
+
         # Inicia overlay se habilitado
         if self._overlay is not None:
             self._overlay.start()
 
         cycle = 0
         while True:
+            # Skip cycle when automation is paused
+            if not toggle.is_active:
+                time.sleep(max(0.5, float(self.config.interval_seconds)))
+                continue
             cycle_started_at = time.perf_counter()
             cycle_id = cycle + 1
             snapshot = self.vision.read_table()
@@ -674,7 +687,7 @@ if __name__ == "__main__":
     max_cycles = int(max_cycles_raw) if max_cycles_raw.isdigit() else None
     active_players_raw = os.getenv("TITAN_ACTIVE_PLAYERS", "").strip()
     active_players = int(active_players_raw) if active_players_raw.isdigit() else None
-    redis_url = os.getenv("TITAN_REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+    redis_url = os.getenv("TITAN_REDIS_URL", "redis://:titan_secret@127.0.0.1:6379/0").strip()
     use_mock_vision = parse_bool_env("TITAN_USE_MOCK_VISION", False)
     mock_vision_scenario = os.getenv("TITAN_MOCK_SCENARIO", "ALT").strip() or "ALT"
 

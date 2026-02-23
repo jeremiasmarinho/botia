@@ -17,7 +17,7 @@ class ServerConfig:
     """HiveBrain server configuration."""
 
     zmq_bind: str = field(default_factory=lambda: os.getenv("TITAN_ZMQ_BIND", "tcp://0.0.0.0:5555"))
-    redis_url: str = field(default_factory=lambda: os.getenv("TITAN_REDIS_URL", "redis://127.0.0.1:6379/0"))
+    redis_url: str = field(default_factory=lambda: os.getenv("TITAN_REDIS_URL", "redis://:titan_secret@127.0.0.1:6379/0"))
 
 
 @dataclass(slots=True)

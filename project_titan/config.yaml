@@ -209,7 +209,7 @@ action_buttons:
 server:
   zmq_bind: "tcp://0.0.0.0:5555"
   zmq_server: "tcp://127.0.0.1:5555"
-  redis_url: "redis://127.0.0.1:6379/0"
+  redis_url: "redis://:titan_secret@127.0.0.1:6379/0"
 
 # ── Opponent profiling: HUD persistente ──────────────────────────────────
 opponent_db:

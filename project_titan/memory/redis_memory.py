@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import json
 import importlib
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+_log = logging.getLogger("titan.memory.redis")
 
 
 @dataclass(slots=True)
@@ -27,7 +30,7 @@ class RedisMemory:
         backend:       ``"redis"`` or ``"memory"`` (set during init).
     """
 
-    redis_url: str = "redis://127.0.0.1:6379/0"
+    redis_url: str = "redis://:titan_secret@127.0.0.1:6379/0"
     ttl_seconds: int = 5
     _cache: dict[str, Any] = field(default_factory=dict)
     _expires_at: dict[str, float] = field(default_factory=dict)
@@ -41,9 +44,10 @@ class RedisMemory:
             client.ping()
             self._redis_client = client
             self.backend = "redis"
-        except Exception:
+        except Exception as exc:
             self._redis_client = None
             self.backend = "memory"
+            _log.warning("Redis unavailable (%s), using in-memory fallback", exc)
 
     def set(self, key: str, value: Any, *, ttl: int | None = None) -> None:
         """Store *value* under *key*.

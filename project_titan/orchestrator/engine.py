@@ -29,6 +29,7 @@ from tools.equity_tool import EquityTool
 from tools.action_tool import ActionTool
 from tools.rng_tool import RngTool
 from agent.zombie_agent import ZombieAgent
+from agent.automation_toggle import AutomationToggle
 from utils.config import ServerConfig, VisionRuntimeConfig
 from utils.logger import TitanLogger
 
@@ -54,6 +55,7 @@ class Orchestrator:
     def __init__(self, config: EngineConfig | None = None) -> None:
         self.config = config or EngineConfig()
         self.registry = ServiceRegistry()
+        self.toggle = AutomationToggle()
         self._running = False
 
     def bootstrap(self) -> None:
@@ -186,7 +188,12 @@ class Orchestrator:
         """Bootstrap, enter the tick loop, and write a report on exit."""
         self.bootstrap()
         self._running = True
+        self.toggle.start()
         _log.highlight("running composition loop")
+        _log.info(
+            f"Automation toggle: {'ON' if self.toggle.is_active else 'OFF'} "
+            f"— press F7 to toggle"
+        )
         tick_count = 0
         total_outcomes = 0
         action_counts: dict[str, int] = {}
@@ -198,18 +205,37 @@ class Orchestrator:
         simulations_max: int | None = None
         dynamic_simulation_decisions = 0
         started_at = time.perf_counter()
+        _consecutive_errors: dict[str, int] = {}
+        _MAX_CONSECUTIVE_ERRORS = 5
 
         try:
             while self._running:
+                if not self.toggle.is_active:
+                    time.sleep(self.config.tick_seconds)
+                    tick_count += 1
+                    if self.config.max_ticks is not None and tick_count >= self.config.max_ticks:
+                        _log.info(f"reached max ticks={self.config.max_ticks}. stopping loop")
+                        self.stop()
+                        break
+                    continue
+
                 for agent_name, agent in self.registry.agents.items():
                     try:
                         outcome = agent.step()
                     except Exception as exc:
+                        _consecutive_errors[agent_name] = _consecutive_errors.get(agent_name, 0) + 1
+                        _err_count = _consecutive_errors[agent_name]
                         _log.error(
                             f"agent '{agent_name}' raised {type(exc).__name__}: {exc} "
-                            "— skipping this tick for that agent"
+                            f"— skipping this tick ({_err_count} consecutive)"
                         )
+                        if _err_count >= _MAX_CONSECUTIVE_ERRORS:
+                            _log.warn(
+                                f"DEGRADED: agent '{agent_name}' failed "
+                                f"{_err_count}x in a row — possible systemic issue"
+                            )
                         continue
+                    _consecutive_errors[agent_name] = 0  # reset on success
                     if outcome is not None:
                         total_outcomes += 1
                         _log.status(f"{agent_name}: {self._format_outcome_for_log(outcome)}")
@@ -247,6 +273,7 @@ class Orchestrator:
             _log.warn("interrupted by user. stopping loop")
             self.stop()
         finally:
+            self.toggle.stop()
             duration_seconds = time.perf_counter() - started_at
             average_win_rate = None
             if win_rate_count > 0:

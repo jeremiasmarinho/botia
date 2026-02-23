@@ -102,7 +102,7 @@ action_buttons:
 server:
   zmq_bind: tcp://0.0.0.0:5555
   zmq_server: tcp://127.0.0.1:5555
-  redis_url: redis://127.0.0.1:6379/0
+  redis_url: redis://:titan_secret@127.0.0.1:6379/0
 agent:
   agent_id: "01"
   table_id: table_default
@@ -115,13 +115,60 @@ logging:
   log_dir: reports/logs
   no_color: false
   disable_file_log: false
+
+# ── Input backend: LDPlayer (ADB touchscreen events) ────────────────────
+# PPPoker Unity accepts ADB `input touchscreen tap` at native 720x1280
+# resolution.  The `wm size` override MUST NOT be active — it breaks
+# both physical clicks and reverses which ADB source Unity accepts.
+# Coordinates in action_coordinates are in Android native resolution
+# (720x1280 for LDPlayer default config).
+input:
+  backend: ldplayer
+  # Android native resolution of the emulator
+  android_w: 720
+  android_h: 1280
+
+# Coordinates in Android native resolution (720x1280):
+# Fold=left, Check/Call=centre, Bet/Raise=right
+# Derived from pixel analysis of actual PPPoker screenshots.
 action_coordinates:
+  # ── Main action bar (bottom of screen) ──
   fold:
-    x: 99
-    y: 990
+    x: 126
+    y: 1220
   call:
-    x: 286
-    y: 990
+    x: 361
+    y: 1220
   raise:
-    x: 460
-    y: 989
+    x: 596
+    y: 1220
+  # ── Raise modal (opens after clicking Raise) ──
+  raise_2x:
+    x: 167
+    y: 1133
+  raise_2_5x:
+    x: 300
+    y: 1133
+  raise_pot:
+    x: 433
+    y: 1133
+  raise_confirm:
+    x: 596
+    y: 1220
+  # ── Raise slider (horizontal drag for custom sizing) ──
+  slider_start:
+    x: 100
+    y: 1160
+  slider_end:
+    x: 620
+    y: 1160
+  # ── Utility buttons ──
+  timebank:
+    x: 360
+    y: 1067
+  sit_out:
+    x: 67
+    y: 67
+  emote:
+    x: 67
+    y: 1133
