@@ -1,11 +1,11 @@
 # Project Titan - Perfil Inicial de Calibracao
 # Objetivo: ponto de partida para alinhar geometria em menos de 2 minutos.
-# Base de referencia: LDPlayer Celular 720x1280, DPI 320, 60 FPS.
+# Base de referencia: MuMu Player 12, 720x1280, DPI 320, 60 FPS.
 # Estrategia: ajustar apenas offset global (dx/dy) e, se preciso, pequenos refinos.
 #
-# ── Configuração fixa do LDPlayer ──────────────────────────────────────
+# ── Configuração fixa do MuMu Player 12 ────────────────────────────────
 # Resolução: Celular → 720 x 1280 (DPI 320)
-# Janela: Rotação automática = ON, Fixar tamanho = OFF
+# Janela: Rotação automática = OFF, Fixar tamanho = OFF
 # FPS: Modo normal (60 FPS)
 # NUNCA usar "wm size" override — quebra o input do Unity.
 # ───────────────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ profile:
   reference_resolution: [720, 1280]
   dpi: 320
   fps: 60
-  notes: "LDPlayer Celular 720x1280 DPI 320 — configuração fixa do projeto"
+  notes: "MuMu Player 12 720x1280 DPI 320 — configuração fixa do projeto"
 
 # Offsets globais de calibracao manual (nao aplicados automaticamente pelo runtime)
 # Regra sugerida:
@@ -34,13 +34,14 @@ overlay:
   min_confidence: 0.25
 
 vision:
-  emulator_title: "LDPlayer"
+  emulator_title: "MuMu"
   confidence_threshold: 0.35
-  # bordas comuns do LDPlayer (ajuste se houver toolbar diferente)
-  chrome_top: 35
+  # MuMu Player 12 — quando capturamos o child "nemuwin" diretamente,
+  # não há chrome (bordas) a remover.
+  chrome_top: 0
   chrome_bottom: 0
   chrome_left: 0
-  chrome_right: 38
+  chrome_right: 0
 
   # ROI de referencia da area da mesa (preset para documentacao/calibracao)
   roi:

@@ -219,7 +219,7 @@ def _check_redis() -> bool:
 
 
 def _check_emulator() -> bool:
-    """Verifica se o emulador LDPlayer está aberto."""
+    """Verifica se o emulador (MuMu Player 12) está aberto."""
     try:
         from agent.vision_yolo import VisionYolo
         v = VisionYolo(model_path="")
@@ -530,7 +530,7 @@ def _preview_live_overlay() -> None:
     confidence = cfg.get_float("vision.confidence_threshold", 0.35)
 
     # --- Localizar emulador ---
-    emulator_title = cfg.get_str("vision.emulator_title", "LDPlayer")
+    emulator_title = cfg.get_str("vision.emulator_title", "MuMu")
     vision = VisionYolo(model_path=model_file_str)
     if not vision.find_window():
         print(_c(_RED, f"  Emulador '{emulator_title}' não encontrado. Está aberto?\n"))

@@ -1,6 +1,6 @@
 """Vision YOLO — Os Olhos do Titan.
 
-Localiza a janela do emulador Android (LDPlayer9) via ``win32gui``,
+Localiza a janela do emulador Android (MuMu Player 12) via ``win32gui``,
 calcula a área útil (canvas) removendo as bordas/chrome do emulador,
 captura apenas a ROI da mesa de poker via ``mss`` e executa inferência
 YOLO para detectar cartas, botões de ação, pot, stack e indicadores de turno.
@@ -21,13 +21,13 @@ Fluxo principal::
 
 Classes públicas
 ----------------
-* :class:`EmulatorWindow` — localiza/rastreia a janela do LDPlayer via win32gui.
+* :class:`EmulatorWindow` — localiza/rastreia a janela do emulador via win32gui.
 * :class:`VisionYolo`     — captura ROI + inferência YOLO → :class:`DetectionFrame`.
 * :class:`DetectionFrame` — resultado bruto de uma inferência.
 
 Variáveis de ambiente
 ---------------------
-``TITAN_EMULATOR_TITLE``     Termo de busca no título da janela (default ``LDPlayer``).
+``TITAN_EMULATOR_TITLE``     Termo de busca no título da janela (default ``MuMu``).
 ``TITAN_YOLO_MODEL``         Caminho do arquivo ``.pt`` de pesos YOLO.
 ``TITAN_YOLO_CONFIDENCE``    Confiança mínima para detecções (default ``0.35``).
 ``TITAN_VISION_TARGET_FPS``  FPS alvo para captura (default ``30``).
@@ -73,13 +73,24 @@ except Exception:  # pragma: no cover
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Constantes — bordas padrão do LDPlayer9
+# Constantes — bordas padrão do emulador (profile-based)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_DEFAULT_CHROME_TOP: int = 35       # Barra de título do LDPlayer
-_DEFAULT_CHROME_BOTTOM: int = 0     # Sem barra inferior normalmente
-_DEFAULT_CHROME_LEFT: int = 0       # Sem sidebar esquerda
-_DEFAULT_CHROME_RIGHT: int = 38     # Toolbar lateral direita do LDPlayer
+try:
+    from utils.emulator_profiles import (
+        get_profile as _get_emu_profile,
+        find_adb_exe as _find_adb_exe,
+        find_render_hwnd as _find_render_hwnd,
+    )
+    _emu_profile = _get_emu_profile()
+except Exception:
+    _emu_profile = None  # type: ignore[assignment]
+    _find_render_hwnd = None  # type: ignore[assignment]
+
+_DEFAULT_CHROME_TOP: int = _emu_profile.chrome_top if _emu_profile else 33
+_DEFAULT_CHROME_BOTTOM: int = _emu_profile.chrome_bottom if _emu_profile else 0
+_DEFAULT_CHROME_LEFT: int = _emu_profile.chrome_left if _emu_profile else 0
+_DEFAULT_CHROME_RIGHT: int = _emu_profile.chrome_right if _emu_profile else 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -163,21 +174,18 @@ class DetectionFrame:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class EmulatorWindow:
-    """Encontra e rastreia a janela do emulador Android (LDPlayer9) no Windows.
+    """Encontra e rastreia a janela do emulador Android no Windows.
 
     Usa ``win32gui.EnumWindows`` para buscar pelo título (substring match).
     Calcula automaticamente a **área útil** (canvas) removendo as bordas
     do emulador (chrome) para que o YOLO receba apenas a imagem da mesa.
 
-    Dimensões do chrome (valores padrão para LDPlayer9):
-        - Topo: 35px (barra de título)
-        - Direita: 38px (toolbar lateral)
-        - Esquerda: 0px
-        - Inferior: 0px
+    Dimensões do chrome são carregadas automaticamente do perfil do
+    emulador ativo (MuMu Player 12).
 
     Args:
         title_pattern:  Substring a procurar no título da janela
-                        (ex: ``"LDPlayer"``, ``"MEmu"``).
+                        (ex: ``"MuMu"``, ``"Android Device"``).
         chrome_top:     Pixels do chrome no topo (barra de título).
         chrome_bottom:  Pixels do chrome na parte inferior.
         chrome_left:    Pixels do chrome à esquerda.
@@ -194,8 +202,8 @@ class EmulatorWindow:
     ) -> None:
         self.title_pattern = (
             title_pattern
-            or os.getenv("TITAN_EMULATOR_TITLE", "LDPlayer").strip()
-            or "LDPlayer"
+            or os.getenv("TITAN_EMULATOR_TITLE", "").strip()
+            or (_emu_profile.title_pattern if _emu_profile else "MuMu")
         )
 
         # Chrome do emulador (bordas a remover)
@@ -224,9 +232,15 @@ class EmulatorWindow:
     def find(self) -> bool:
         """Localiza a janela do emulador pelo título parcial via win32gui.
 
-        Usa ``win32gui.EnumWindows`` para iterar todas as janelas visíveis
-        e encontrar a primeira cujo título contém ``title_pattern``.
-        Atualiza posição, tamanho e calcula a ROI automaticamente.
+        Strategy:
+          1. Use ``find_render_hwnd`` from emulator_profiles (if available)
+             to get the render child HWND (e.g. ``nemuwin`` in MuMu).
+          2. Fallback: ``EnumWindows`` title match → look for render child
+             among the matched window's children.
+          3. Last resort: use the main window HWND directly.
+
+        Uses ``GetWindowRect`` on the chosen HWND to get absolute screen
+        coordinates, then calculates the game ROI by subtracting chrome.
 
         Returns:
             ``True`` se a janela foi encontrada e a ROI é válida.
@@ -235,34 +249,45 @@ class EmulatorWindow:
             self._last_find_ok = False
             return False
 
-        found_hwnd: int = 0
-        pattern_lower = self.title_pattern.lower()
+        # ── Strategy A: profile-based render child discovery ──
+        render_hwnd: int | None = None
+        if _find_render_hwnd is not None and _emu_profile is not None:
+            try:
+                render_hwnd = _find_render_hwnd(_emu_profile)
+            except Exception:
+                pass
 
-        def _enum_callback(hwnd: int, _extra: Any) -> bool:
-            """Callback para EnumWindows — para na primeira janela válida."""
-            nonlocal found_hwnd
-            if not win32gui.IsWindowVisible(hwnd):
-                return True  # continua iterando
-            title = win32gui.GetWindowText(hwnd)
-            if pattern_lower in title.lower():
-                found_hwnd = hwnd
-                return False  # para a enumeração
-            return True
+        if render_hwnd and win32gui.IsWindowVisible(render_hwnd):
+            self._hwnd = render_hwnd
+        else:
+            # ── Strategy B: title-based enumeration ──
+            found_hwnd: int = 0
+            pattern_lower = self.title_pattern.lower()
 
-        try:
-            win32gui.EnumWindows(_enum_callback, None)
-        except Exception:
-            # EnumWindows levanta exceção quando o callback retorna False
-            # (é o comportamento normal para "parar" a enumeração).
-            pass
+            def _enum_callback(hwnd: int, _extra: Any) -> bool:
+                nonlocal found_hwnd
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                title = win32gui.GetWindowText(hwnd)
+                if pattern_lower in title.lower():
+                    found_hwnd = hwnd
+                    return False
+                return True
 
-        if found_hwnd == 0:
-            self._last_find_ok = False
-            return False
+            try:
+                win32gui.EnumWindows(_enum_callback, None)
+            except Exception:
+                pass
 
-        self._hwnd = found_hwnd
+            if found_hwnd == 0:
+                self._last_find_ok = False
+                return False
 
-        # Obtém o retângulo da janela (coordenadas absolutas da tela)
+            # Try to find a render child (nemuwin, subWin, etc.)
+            child_hwnd = self._find_render_child(found_hwnd)
+            self._hwnd = child_hwnd if child_hwnd else found_hwnd
+
+        # Get the screen rect of the chosen HWND
         try:
             rect = win32gui.GetWindowRect(self._hwnd)
             self._win_left = int(rect[0])
@@ -281,6 +306,45 @@ class EmulatorWindow:
         self._calculate_game_area()
         self._last_find_ok = self._canvas_w > 0 and self._canvas_h > 0
         return self._last_find_ok
+
+    @staticmethod
+    def _find_render_child(parent_hwnd: int) -> int | None:
+        """Find the best render-surface child of *parent_hwnd*.
+
+        Checks for known render child class names (nemuwin, subWin, etc.).
+        Falls back to the largest visible child by area.
+        """
+        if win32gui is None:
+            return None
+
+        known_classes = {"nemuwin", "subWin", "sub", "TheRender", "RenderWindow"}
+        best_known: int | None = None
+        best_area: int = 0
+        best_generic: int | None = None
+
+        def _enum_child(hwnd: int, _lp: Any) -> bool:
+            nonlocal best_known, best_area, best_generic
+            try:
+                cname = win32gui.GetClassName(hwnd)
+                if cname in known_classes:
+                    best_known = hwnd
+                    return False  # found a known class — stop
+                # Track largest child as fallback
+                r = win32gui.GetClientRect(hwnd)
+                area = (r[2] - r[0]) * (r[3] - r[1])
+                if area > best_area:
+                    best_area = area
+                    best_generic = hwnd
+            except Exception:
+                pass
+            return True
+
+        try:
+            win32gui.EnumChildWindows(parent_hwnd, _enum_child, None)
+        except Exception:
+            pass
+
+        return best_known or best_generic
 
     def find_window(self) -> bool:
         """Alias para :meth:`find` — mantém compatibilidade com run_titan."""
@@ -305,12 +369,12 @@ class EmulatorWindow:
             canvas_w = win_width  - chrome_left - chrome_right
             canvas_h = win_height - chrome_top  - chrome_bottom
 
-        Exemplo para LDPlayer9 (window 900×1600, chrome top=35, right=38):
+        Exemplo para MuMu Player 12 (window 720×1280, chrome all 0):
 
             offset_x = win_left + 0   = win_left
-            offset_y = win_top  + 35
-            canvas_w = 900 - 0 - 38   = 862
-            canvas_h = 1600 - 35 - 0  = 1565
+            offset_y = win_top  + 0
+            canvas_w = 720 - 0 - 0    = 720
+            canvas_h = 1280 - 0 - 0   = 1280
         """
         self._offset_x = self._win_left + self._chrome_left
         self._offset_y = self._win_top + self._chrome_top
@@ -727,7 +791,7 @@ class VisionYolo:
 
         Diferente de :meth:`capture_frame` (que usa ``mss`` e depende da
         janela estar visível no desktop), este método obtém o conteúdo
-        real da tela Android via ADB — funciona mesmo se o LDPlayer
+        real da tela Android via ADB — funciona mesmo se o emulador
         estiver coberto por outras janelas.
 
         Retorna um array numpy BGR (H×W×3) em resolução nativa Android
@@ -736,8 +800,19 @@ class VisionYolo:
         import subprocess as _sp
         import io as _io
 
-        adb_exe = os.getenv("TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe")
-        adb_dev = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
+        adb_exe = os.getenv("TITAN_ADB_PATH", "")
+        if not adb_exe and _emu_profile:
+            _found = _find_adb_exe(_emu_profile)
+            adb_exe = _found or ""
+        # Use cached/env device serial — NEVER call `adb devices` here
+        # because it restarts the ADB daemon and kills the emulator's
+        # network bridge (PPPoker loses internet).
+        adb_dev = os.getenv("TITAN_ADB_DEVICE", "").strip()
+        if not adb_dev:
+            # Use the cached value from a previous successful lookup
+            adb_dev = getattr(self, "_cached_adb_device", "")
+        if not adb_dev:
+            adb_dev = _emu_profile.default_adb_device if _emu_profile else "127.0.0.1:16384"
 
         try:
             r = _sp.run(

@@ -42,6 +42,7 @@ from tools.action_tool import ActionTool
 from tools.equity_tool import EquityTool
 from tools.rng_tool import RngTool
 from tools.terminator_vision import TerminatorVision
+from tools.titan_hud_state import hud_state
 from tools.vision_tool import VisionTool
 from utils.config import AgentRuntimeConfig, OCRRuntimeConfig, VisionRuntimeConfig
 from utils.logger import TitanLogger
@@ -571,6 +572,27 @@ class PokerAgent:
             f"— pressione {toggle._hotkey} para alternar"
         )
 
+        # ── HUD toggle bridge ──────────────────────────────────
+        def _hud_toggle_cb(active: bool) -> None:
+            if active:
+                toggle.activate()
+            else:
+                toggle.deactivate()
+        hud_state.set_toggle_callback(_hud_toggle_cb)
+        hud_state.push(bot_active=toggle.is_active)
+
+        # ── HUD: Painel de Controle visual ─────────────────────────
+        _hud = None
+        _hud_disabled = os.getenv("TITAN_HUD_DISABLED", "0").strip() in ("1", "true", "yes")
+        if not _hud_disabled:
+            try:
+                from tools.titan_hud import TitanHUD
+                _hud = TitanHUD()
+                _hud.start()
+                _log.success("Painel de Controle (HUD) iniciado")
+            except Exception as _hud_err:
+                _log.warn(f"HUD não pôde ser iniciado: {_hud_err}")
+
         # Inicia overlay se habilitado
         if self._overlay is not None:
             self._overlay.start()
@@ -586,22 +608,25 @@ class PokerAgent:
                         f"Toggle automação: OFF — pressione {toggle._hotkey} para ativar "
                         f"(aguardando há {_toggle_log_counter} ciclos)"
                     )
+                hud_state.push(bot_active=False)
                 time.sleep(max(0.5, float(self.config.interval_seconds)))
                 continue
             # Reset counter when active
             if _toggle_log_counter > 0:
                 _log.highlight(f"Toggle automação: ON — iniciando ciclos de jogo")
                 _toggle_log_counter = 0
+            hud_state.push(bot_active=True)
             cycle_started_at = time.perf_counter()
             cycle_id = cycle + 1
             snapshot = self.vision.read_table()
             self._log_seen_cards(_log, list(getattr(snapshot, "hero_cards", [])))
 
-            # Use ADB screencap instead of mss — immune to window occlusion
-            current_ocr_frame = self.ocr_vision.capture_frame_adb()
+            # Use mss capture first (no ADB — safe for network)
+            # ADB screencap as last resort only
+            current_ocr_frame = self.ocr_vision.capture_frame()
             if current_ocr_frame is None:
-                # fallback to mss if ADB fails
-                current_ocr_frame = self.ocr_vision.capture_frame()
+                # fallback to ADB if mss fails (window occluded, etc.)
+                current_ocr_frame = self.ocr_vision.capture_frame_adb()
 
             # Overlay: atualiza frame e snapshot
             if self._overlay is not None:
@@ -609,6 +634,18 @@ class PokerAgent:
                     self._overlay.update_frame(current_ocr_frame)
                 self._overlay.update_snapshot(snapshot)
                 self._overlay.update_ocr_regions(self.ocr_config.regions())
+
+            # HUD: push table snapshot
+            hud_state.push(
+                hero_cards=list(getattr(snapshot, 'hero_cards', [])),
+                board_cards=list(getattr(snapshot, 'board_cards', [])),
+                dead_cards=list(getattr(snapshot, 'dead_cards', [])),
+                pot=float(getattr(snapshot, 'pot', 0.0)),
+                stack=float(getattr(snapshot, 'stack', 0.0)),
+                call_amount=float(getattr(snapshot, 'call_amount', 0.0)),
+                active_players=int(getattr(snapshot, 'active_players', 0)),
+                is_my_turn=bool(getattr(snapshot, 'is_my_turn', False)),
+            )
 
             if not self._use_mock_vision:
                 if current_ocr_frame is None:
@@ -650,6 +687,10 @@ class PokerAgent:
                         "sanity_ok=0 "
                         f"reason={self.sanity_guard.last_reason} "
                         f"pot={ocr_pot:.2f} stack={ocr_stack:.2f} call={ocr_call:.2f}"
+                    )
+                    hud_state.push(
+                        sanity_ok=False,
+                        sanity_reason=self.sanity_guard.last_reason,
                     )
                     time.sleep(max(0.1, float(self.config.interval_seconds)))
                     continue
@@ -710,6 +751,29 @@ class PokerAgent:
                     street=outcome.street if hasattr(outcome, 'street') else 'preflop',
                 )
 
+            # HUD: push decision
+            hud_state.push(
+                action=outcome.action,
+                equity=outcome.equity,
+                spr=outcome.spr,
+                street=getattr(outcome, 'street', 'preflop'),
+                pot_odds=getattr(outcome, 'pot_odds', 0.0),
+                committed=getattr(outcome, 'committed', False),
+                mode=getattr(outcome, 'mode', 'SOLO'),
+                opponent_class=getattr(outcome, 'opponent_class', 'Unknown'),
+                gto_distribution=getattr(outcome, 'gto_distribution', {}),
+                description=getattr(outcome, 'description', ''),
+                cycle_id=cycle_id,
+                cycle_ms=cycle_ms,
+                sanity_ok=True,
+                sanity_reason='ok',
+            )
+            hud_state.log_action(
+                f"[{time.strftime('%H:%M:%S')}] #{cycle_id} {outcome.action.upper()} "
+                f"| Eq {outcome.equity:.0%} | Pot {snapshot.pot:.0f} "
+                f"| SPR {outcome.spr:.1f} | {outcome.mode}"
+            )
+
             log_method = _log.highlight if mode == "squad" else _log.info
             log_method(
                 f"mode={mode} partners={partners} "
@@ -739,6 +803,9 @@ class PokerAgent:
         # Encerra overlay ao sair do loop
         if self._overlay is not None:
             self._overlay.stop()
+        # Encerra HUD
+        if _hud is not None:
+            _hud.stop()
 
 
 if __name__ == "__main__":

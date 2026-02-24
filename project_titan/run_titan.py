@@ -4,7 +4,7 @@ Orquestra a inicialização completa do sistema autônomo de poker PLO6:
 
   1. Habilita cores ANSI no terminal Windows.
   2. Verifica se o Redis está acessível (fallback in-memory OK).
-  3. Localiza a janela do LDPlayer9 via ``VisionYolo.find_window()``.
+  3. Localiza a janela do MuMu Player 12 via ``VisionYolo.find_window()``.
   4. Inicia o HiveBrain (servidor ZMQ) em **thread** dedicada.
   5. Inicia o loop principal do PokerAgent na thread principal.
   6. Exibe logs coloridos em tempo real para monitoramento.
@@ -12,7 +12,7 @@ Orquestra a inicialização completa do sistema autônomo de poker PLO6:
 Uso::
 
     python run_titan.py
-    python run_titan.py --agents 2 --emulator "LDPlayer"
+    python run_titan.py --agents 2 --emulator "MuMu"
     python run_titan.py --model best.pt --table mesa_1
 
 Variáveis de ambiente (opcionais — sobrescrevem args)
@@ -139,7 +139,7 @@ def check_emulator(title_pattern: str) -> bool:
 
         if found:
             emu = vision.emulator
-            _log("OK", f"LDPlayer encontrado: {_GREEN}{emu!r}{_RESET}")
+            _log("OK", f"Emulador encontrado: {_GREEN}{emu!r}{_RESET}")
             _log("VISION", (
                 f"Janela: ({emu.left},{emu.top}) {emu.width}x{emu.height}  "
                 f"ROI: ({emu.offset_x},{emu.offset_y}) {emu.canvas_width}x{emu.canvas_height}  "
@@ -166,88 +166,49 @@ _EXPECTED_DPI = 320
 def check_emulator_resolution() -> bool:
     """Validate the emulator is running at the expected 720x1280 DPI 320.
 
-    Queries ``adb shell wm size`` and ``adb shell wm density`` to verify
-    the Android virtual display matches our fixed configuration.
+    Uses the emulator profile system to check resolution via the
+    appropriate console CLI (MuMuManager.exe or ldconsole.exe).
+
+    **No ADB calls are made.**  Direct ADB calls restart the ADB daemon,
+    which drops the emulator's virtual network bridge and kills the
+    PPPoker connection.
 
     Returns:
-        ``True`` if resolution and density match expectations.
+        ``True`` if resolution and density match expectations (or if we
+        cannot determine — defaults to OK to avoid blocking startup).
     """
-    adb = os.getenv("TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe")
-    device = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
-
-    ok = True
-
-    # ── Check resolution ────────────────────────────────────────────
     try:
-        res = subprocess.run(
-            [adb, "-s", device, "shell", "wm", "size"],
-            capture_output=True, text=True, timeout=5,
+        from utils.emulator_profiles import (
+            get_profile, find_console_exe, check_resolution,
         )
-        output = res.stdout.strip()
-        # "Physical size: 720x1280" or "Physical size: 720x1280\nOverride size: ..."
-        lines = output.splitlines()
-        physical = None
-        override = None
-        for line in lines:
-            if "Override" in line:
-                override = line.split(":")[-1].strip()
-            elif "Physical" in line:
-                physical = line.split(":")[-1].strip()
 
-        if override:
+        profile = get_profile()
+        console_exe = find_console_exe(profile)
+        ok, msg = check_resolution(
+            console_exe=console_exe,
+            profile=profile,
+            expected_w=_EXPECTED_W,
+            expected_h=_EXPECTED_H,
+            expected_dpi=_EXPECTED_DPI,
+        )
+
+        if ok:
+            _log("OK", f"{profile.display_name}: {_GREEN}{msg}{_RESET}")
+            _log("OK", f"Resolução: {_GREEN}{_EXPECTED_W}x{_EXPECTED_H}{_RESET}")
+            _log("OK", f"DPI: {_GREEN}{_EXPECTED_DPI}{_RESET}")
+        else:
             _log("ERROR", (
-                f"{_RED}WM SIZE OVERRIDE DETECTADO: {override}{_RESET}\n"
-                f"         O override QUEBRA o input do Unity/PPPoker!\n"
-                f"         Execute: adb -s {device} shell wm size reset"
+                f"{_RED}{msg}{_RESET}\n"
+                f"         Altere no {profile.display_name}: Configuração → Tela → "
+                f"{_EXPECTED_W}x{_EXPECTED_H} (DPI {_EXPECTED_DPI})"
             ))
-            ok = False
-        elif physical:
-            expected = f"{_EXPECTED_W}x{_EXPECTED_H}"
-            if physical != expected:
-                _log("ERROR", (
-                    f"{_RED}Resolução incorreta: {physical} (esperado {expected}){_RESET}\n"
-                    f"         Altere no LDPlayer: Configuração → Tela → Celular → 720x1280 (DPI 320)"
-                ))
-                ok = False
-            else:
-                _log("OK", f"Resolução: {_GREEN}{physical}{_RESET}")
-        else:
-            _log("WARN", f"Não foi possível ler wm size: {output}")
+        return ok
+
     except Exception as exc:
-        _log("WARN", f"Falha ao verificar resolução via ADB: {exc}")
-
-    # ── Check density/DPI ───────────────────────────────────────────
-    try:
-        res = subprocess.run(
-            [adb, "-s", device, "shell", "wm", "density"],
-            capture_output=True, text=True, timeout=5,
-        )
-        output = res.stdout.strip()
-        lines = output.splitlines()
-        density = None
-        for line in lines:
-            if "Physical" in line or "density" in line.lower():
-                parts = line.split(":")
-                if len(parts) >= 2:
-                    try:
-                        density = int(parts[-1].strip())
-                    except ValueError:
-                        pass
-
-        if density is not None:
-            if density != _EXPECTED_DPI:
-                _log("WARN", (
-                    f"DPI: {density} (esperado {_EXPECTED_DPI}) — "
-                    f"pode afetar precisão do OCR"
-                ))
-            else:
-                _log("OK", f"DPI: {_GREEN}{density}{_RESET}")
-        else:
-            _log("WARN", f"Não foi possível ler wm density: {output}")
-    except Exception as exc:
-        _log("WARN", f"Falha ao verificar DPI via ADB: {exc}")
-
-    return ok
+        _log("WARN", f"Verificação de resolução falhou: {exc} — assumindo correto")
+        _log("OK", f"Resolução: {_GREEN}{_EXPECTED_W}x{_EXPECTED_H}{_RESET} (assumido)")
+        _log("OK", f"DPI: {_GREEN}{_EXPECTED_DPI}{_RESET} (assumido)")
+        return True
 
 
 def check_dependencies() -> bool:
@@ -305,20 +266,53 @@ _hive_running = threading.Event()
 _hive_error: str = ""
 
 
+def _extract_port(bind_address: str) -> int | None:
+    """Extract port number from a ZMQ bind address like 'tcp://0.0.0.0:5555'."""
+    try:
+        return int(bind_address.rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _release_port(port: int) -> None:
+    """Kill any process still listening on *port* (Windows).
+
+    Prevents 'Address in use' errors when restarting Titan after a crash.
+    """
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.split()
+                pid = parts[-1]
+                if pid.isdigit() and int(pid) != os.getpid():
+                    _log("WARN", f"Porta {port} em uso pelo PID {pid} \u2014 encerrando processo anterior...")
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid],
+                        capture_output=True, timeout=5,
+                    )
+                    time.sleep(0.5)
+    except Exception:
+        pass
+
+
 def _run_hive_brain(bind_address: str, redis_url: str) -> None:
     """Entry point da thread do HiveBrain.
 
-    Importa e inicia o servidor ZMQ.  Se falhar, sinaliza via
-    ``_hive_error`` para que a thread principal possa reportar.
+    Importa e inicia o servidor ZMQ.  O ``ready_event`` \u00e9 passado para
+    ``brain.start()`` que s\u00f3 o sinaliza **ap\u00f3s** o bind ter sido bem-sucedido,
+    evitando race conditions com a thread principal.
     """
     global _hive_error
     try:
         from core.hive_brain import HiveBrain
 
         brain = HiveBrain(bind_address=bind_address, redis_url=redis_url)
-        _hive_running.set()
-        _log("HIVE", f"HiveBrain escutando em {_BLUE}{bind_address}{_RESET}")
-        brain.start()
+        # brain.start() will set _hive_running AFTER successful bind
+        brain.start(ready_event=_hive_running)
     except Exception as err:
         _hive_error = str(err)
         _hive_running.set()  # Desbloqueia a thread principal para reportar erro
@@ -407,7 +401,7 @@ def main() -> int:
     1. Habilita cores ANSI.
     2. Verifica dependências (zmq, redis, mss, win32gui).
     3. Verifica Redis (continua sem se indisponível).
-    4. Localiza o LDPlayer via VisionYolo (win32gui + ROI).
+    4. Localiza o MuMu Player 12 via VisionYolo (win32gui + ROI).
     5. Inicia o HiveBrain em thread daemon.
     6. Inicia o(s) PokerAgent(s) em subprocessos.
     7. Monitora e exibe logs coloridos em tempo real.
@@ -424,7 +418,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--emulator", type=str, default="",
-        help="Título da janela do emulador (default: LDPlayer)",
+        help="Título da janela do emulador (default: MuMu)",
     )
     parser.add_argument(
         "--model", type=str, default="",
@@ -453,7 +447,13 @@ def main() -> int:
     python = find_python()
     redis_url = args.redis or os.getenv("TITAN_REDIS_URL", "redis://:titan_secret@127.0.0.1:6379/0")
     zmq_bind = args.zmq_bind or os.getenv("TITAN_ZMQ_BIND", "tcp://0.0.0.0:5555")
-    emulator_title = args.emulator or os.getenv("TITAN_EMULATOR_TITLE", "LDPlayer")
+    emulator_title = args.emulator or os.getenv("TITAN_EMULATOR_TITLE", "")
+    if not emulator_title:
+        try:
+            from utils.emulator_profiles import get_profile as _gp
+            emulator_title = _gp().title_pattern
+        except Exception:
+            emulator_title = "MuMu"
 
     # Resolve YOLO model path: --model arg > env var > config_club.yaml
     model_path = args.model or os.getenv("TITAN_YOLO_MODEL", "")
@@ -509,7 +509,7 @@ def main() -> int:
     print()
 
     # ══════════════════════════════════════════════════════════════════
-    # ETAPA 3/5: Localizar LDPlayer via VisionYolo
+    # ETAPA 3/5: Localizar emulador via VisionYolo
     # ══════════════════════════════════════════════════════════════════
     _log("STEP", f"{'═' * 50}")
     _log("STEP", "ETAPA 3/5: Localizando janela do emulador")
@@ -523,9 +523,9 @@ def main() -> int:
     if not resolution_ok:
         _log("ERROR", (
             f"{_RED}Resolução do emulador INCORRETA!{_RESET}\n"
-            "         Configure no LDPlayer:\n"
+            "         Configure no MuMu Player 12:\n"
             "           Tela → Celular → 720 x 1280 (DPI 320)\n"
-            "           60 FPS, Rotação automática ON, Fixar tamanho OFF\n"
+            "           60 FPS, Rotação automática OFF\n"
             "         Se houver wm size override, execute:\n"
             "           adb shell wm size reset"
         ))
@@ -557,6 +557,40 @@ def main() -> int:
                             break
                 except Exception:
                     pass
+
+    # ── Bridge input backend config from YAML → environment ─────────
+    # GhostMouse reads TITAN_INPUT_BACKEND to pick the click injection
+    # strategy.  Without this bridge, it defaults to "pyautogui" which
+    # moves the physical cursor and does NOT work for background click
+    # injection into the emulator.
+    if not env.get("TITAN_INPUT_BACKEND"):
+        for cfg_name in ("config_club.yaml", "config.yaml"):
+            cfg_path = os.path.join(project_dir, cfg_name)
+            if os.path.isfile(cfg_path) and _yaml is not None:
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        _cfg = _yaml.safe_load(_f)
+                    if isinstance(_cfg, dict):
+                        _inp = _cfg.get("input", {})
+                        if isinstance(_inp, dict):
+                            _backend = _inp.get("backend")
+                            if _backend:
+                                env["TITAN_INPUT_BACKEND"] = str(_backend).strip()
+                                _log("OK", f"Input backend: {_GREEN}{_backend}{_RESET}")
+                                # Also bridge android resolution if present
+                                _aw = _inp.get("android_w")
+                                _ah = _inp.get("android_h")
+                                if _aw:
+                                    env["TITAN_ANDROID_W"] = str(_aw)
+                                if _ah:
+                                    env["TITAN_ANDROID_H"] = str(_ah)
+                                break
+                except Exception:
+                    pass
+    # If still not set and ghost_mouse is active, default to emulator backend
+    if env.get("TITAN_GHOST_MOUSE") == "1" and not env.get("TITAN_INPUT_BACKEND"):
+        env["TITAN_INPUT_BACKEND"] = "emulator"
+        _log("OK", f"Input backend (auto): {_GREEN}emulator{_RESET}")
 
     # ── Bridge OCR config from YAML → environment ───────────────────
     # OCRRuntimeConfig reads from env vars; here we load settings from
@@ -614,7 +648,11 @@ def main() -> int:
     # Card reader: enable debug for first run diagnostics
     env.setdefault("TITAN_CARD_READER_DEBUG", "1")
     env.setdefault("TITAN_CARD_READER_HERO_OFFSET_Y_TOP", "-420")
-    env.setdefault("TITAN_CARD_READER_HERO_OFFSET_Y_BOTTOM", "-260")
+    env.setdefault("TITAN_CARD_READER_HERO_OFFSET_Y_BOTTOM", "-150")
+
+    # Vision confidence: lower threshold so YOLO picks up marginal
+    # card detections (PPPoker cards score ~0.10-0.25, buttons ~0.90+).
+    env.setdefault("TITAN_VISION_CONF", "0.08")
 
     # ══════════════════════════════════════════════════════════════════
     # ETAPA 4/5: Iniciar HiveBrain (thread)
@@ -622,6 +660,12 @@ def main() -> int:
     _log("STEP", f"{'═' * 50}")
     _log("STEP", "ETAPA 4/5: Iniciando HiveBrain (thread ZMQ)")
     _log("STEP", f"{'═' * 50}")
+
+    # ─ Release port if a zombie process from a previous run still holds it
+    zmq_port = _extract_port(zmq_bind)
+    if zmq_port:
+        _release_port(zmq_port)
+
     hive_ok = start_hive_brain_thread(bind_address=zmq_bind, redis_url=redis_url)
     if not hive_ok:
         _log("ERROR", "HiveBrain falhou ao iniciar. Abortando.")
@@ -630,6 +674,14 @@ def main() -> int:
     # Aguarda estabilização
     _log("INFO", "Aguardando 2s para o HiveBrain estabilizar...")
     time.sleep(2.0)
+
+    # Verifica se a thread ainda está viva após o intervalo
+    if _hive_thread is not None and not _hive_thread.is_alive():
+        _log("ERROR", "HiveBrain morreu durante a estabilização. Abortando.")
+        if _hive_error:
+            _log("ERROR", f"Causa: {_hive_error}")
+        return 1
+
     _log("OK", "HiveBrain estável e escutando")
     print()
 
@@ -639,6 +691,7 @@ def main() -> int:
     _log("STEP", f"{'═' * 50}")
     _log("STEP", f"ETAPA 5/5: Iniciando {args.agents} agente(s)")
     _log("STEP", f"{'═' * 50}")
+
     agent_procs: list[subprocess.Popen] = []
     for i in range(args.agents):
         agent_id = f"{i + 1:02d}"

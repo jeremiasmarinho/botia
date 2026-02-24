@@ -4,9 +4,9 @@
 # Ajuste o comportamento do bot sem tocar em código Python.
 # Variáveis de ambiente (TITAN_*) sobrescrevem valores deste arquivo.
 # ═══════════════════════════════════════════════════════════════════════════
-# ── Emulador: configuração fixa do LDPlayer ───────────────────────────────
+# ── Emulador: configuração fixa do MuMu Player 12 ─────────────────────────────
 # NUNCA alterar estes valores — todo o projeto está calibrado para eles.
-# Se mudar resolução no LDPlayer, TODAS as coordenadas quebram.
+# Se mudar resolução no MuMu, TODAS as coordenadas quebram.
 emulator:
   resolution_w: 720
   resolution_h: 1280
@@ -17,13 +17,13 @@ emulator:
   # NUNCA usar "wm size" override — quebra input do Unity/PPPoker
   wm_size_override: false
 
-# ── Input backend: LDPlayer (ADB touchscreen events) ────────────────────
+# ── Input backend: MuMu Player 12 (Win32 + ADB fallback) ──────────────
 input:
-  backend: ldplayer
+  backend: mumu
   android_w: 720
   android_h: 1280
-  adb_path: "F:\\LDPlayer\\LDPlayer9\\adb.exe"
-  adb_device: "emulator-5554"
+  adb_path: "F:\\Program Files\\Netease\\MuMuPlayer\\nx_main\\adb.exe"
+  adb_device: "127.0.0.1:16384"
 # ── Poker: estratégia e agressividade ─────────────────────────────────────
 poker:
   # Perfil da mesa: tight | normal | aggressive
@@ -75,16 +75,16 @@ vision:
   confidence_threshold: 0.35
 
   # Título parcial da janela do emulador
-  emulator_title: "LDPlayer"
+  emulator_title: "MuMu"
 
   # FPS alvo para captura de tela
   target_fps: 30
 
   # Chrome do emulador (pixels a remover)
-  chrome_top: 35
+  chrome_top: 0
   chrome_bottom: 0
   chrome_left: 0
-  chrome_right: 38
+  chrome_right: 0
 
   # Salvar snapshots a cada frame (modo coleta)
   collect_data: false
@@ -95,7 +95,7 @@ vision:
   # Modo fail-fast: aborta se modelo não carregar
   fail_fast: false
 
-  # ROI manual de referência (720x1280 — LDPlayer Celular DPI 320)
+  # ROI manual de referência (720x1280 — MuMu Player 12 DPI 320)
   roi:
     left: 0
     top: 0

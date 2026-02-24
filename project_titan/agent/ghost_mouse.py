@@ -1,31 +1,30 @@
-"""Ghost Mouse v3 — movimento humanizado + click injection multi-backend.
+"""Ghost Mouse v3 â€” movimento humanizado + click injection multi-backend.
 
 Implementa o Ghost Protocol do Project Titan:
   - Curvas de Bezier cubicas (nunca move em linha reta).
   - Injecao de ruido gaussiano (micro-arcos aleatorios).
   - Velocidade variavel por dificuldade da decisao (tweening).
   - Coordenadas relativas a janela do emulador -> absolutas na tela.
-  - **Velocity curve** — ease-in/ease-out.
-  - **Micro-overshoots** — cursor ultrapassa o alvo e corrige.
-  - **Log-normal click hold** — tempo de pressionamento realista.
-  - **Poisson reaction delay** — tempo de "pensamento" modulado.
-  - **Idle jitter** — micro-movimentos entre acoes.
+  - **Velocity curve** â€” ease-in/ease-out.
+  - **Micro-overshoots** â€” cursor ultrapassa o alvo e corrige.
+  - **Log-normal click hold** â€” tempo de pressionamento realista.
+  - **Poisson reaction delay** â€” tempo de "pensamento" modulado.
+  - **Idle jitter** â€” micro-movimentos entre acoes.
 
 Click Injection Backends (fallback chain, v3)
 ----------------------------------------------
-O LDPlayer com PPPoker (Unity) rejeita varias fontes de input.
-A cadeia de fallback tenta, em ordem:
+O emulador (MuMu Player 12 ou LDPlayer) com PPPoker (Unity) rejeita
+varias fontes de input.  A cadeia de fallback tenta, em ordem:
 
-  1. **Win32 SendMessage** — envia WM_LBUTTONDOWN/UP directamente ao
-     HWND do RenderWindow do LDPlayer.  O Unity nao consegue distinguir
-     isto de um clique fisico.  Funciona mesmo com janela em background.
-  2. **LDConsole API** — usa ``ldconsole.exe action --index N --key
-     call.input --value "X Y"`` que injeta via o motor do emulador,
-     bypassando completamente o Android guest.
-  3. **Persistent ADB shell** — ``input touchscreen tap`` via stdin de
+  1. **Win32 SendMessage** â€” envia WM_LBUTTONDOWN/UP directamente ao
+     HWND da render surface do emulador.  O Unity nao consegue
+     distinguir isto de um clique fisico.  Funciona em background.
+  2. **Console API** â€” usa o CLI do emulador (MuMuManager.exe ou
+     ldconsole.exe) para injetar taps.
+  3. **Persistent ADB shell** â€” ``input touchscreen tap`` via stdin de
      um processo ``adb shell`` persistente (~10 ms latencia).
-  4. **ADB subprocess** — classic ``subprocess.run()`` (~300 ms).
-  5. **Raw sendevent** — multi-touch protocol B directo ao
+  4. **ADB subprocess** â€” classic ``subprocess.run()`` (~300 ms).
+  5. **Raw sendevent** â€” multi-touch protocol B directo ao
      ``/dev/input/event2`` com mapeamento correcto de eixos do
      digitizer (descobertos via ``getevent -p``).
 
@@ -70,62 +69,34 @@ except Exception:
 
 
 # ---------------------------------------------------------------------------
-# Win32 helpers for LDPlayer window discovery
+# Win32 helpers for emulator window discovery (profile-agnostic)
 # ---------------------------------------------------------------------------
 
 _user32 = ctypes.windll.user32 if os.name == "nt" else None  # type: ignore[attr-defined]
 _kernel32 = ctypes.windll.kernel32 if os.name == "nt" else None  # type: ignore[attr-defined]
+
+# Import emulator profile system
+from utils.emulator_profiles import (
+    EmulatorProfile,
+    get_profile as _get_emu_profile,
+    find_render_hwnd as _profile_find_render_hwnd,
+    find_console_exe as _profile_find_console_exe,
+    find_adb_exe as _profile_find_adb_exe,
+    console_tap as _profile_console_tap,
+)
 
 
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
-def _find_ldplayer_render_hwnd() -> int | None:
-    """Return the HWND of LDPlayer's RenderWindow, or *None*.
+def _find_emulator_render_hwnd(profile: EmulatorProfile | None = None) -> int | None:
+    """Return the HWND of the emulator's render surface.
 
-    Searches for the ``LDPlayerMainFrame`` top-level window and its
-    ``RenderWindow`` child.  Also checks ``TheRender`` and ``sub`` class
-    names used by newer LDPlayer versions.
+    Uses the emulator profile system to discover the correct window
+    regardless of which emulator is active (MuMu Player 12, LDPlayer, etc.).
     """
-    if _user32 is None:
-        return None
-
-    result: list[int] = []
-    _render_classes = {"RenderWindow", "TheRender", "sub"}
-
-    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-    def _enum_top(hwnd: int, _lp: int) -> bool:
-        if not _user32.IsWindowVisible(hwnd):
-            return True
-        cname = ctypes.create_unicode_buffer(256)
-        _user32.GetClassNameW(hwnd, cname, 256)
-        if cname.value in ("LDPlayerMainFrame", "LDPlayer"):
-            @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-            def _enum_child(child: int, _lp2: int) -> bool:
-                cn2 = ctypes.create_unicode_buffer(256)
-                _user32.GetClassNameW(child, cn2, 256)
-                if cn2.value in _render_classes:
-                    result.append(child)
-                    return False
-                return True
-
-            _user32.EnumChildWindows(hwnd, _enum_child, 0)
-            if result:
-                return False
-        return True
-
-    _user32.EnumWindows(_enum_top, 0)
-
-    # Fallback: if no child RenderWindow, try FindWindow for the main frame
-    if not result:
-        for cls in ("LDPlayerMainFrame", "LDPlayer"):
-            hwnd = _user32.FindWindowW(cls, None)
-            if hwnd:
-                result.append(hwnd)
-                break
-
-    return result[0] if result else None
+    return _profile_find_render_hwnd(profile)
 
 
 def _get_render_screen_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -138,11 +109,12 @@ def _get_render_screen_rect(hwnd: int) -> tuple[int, int, int, int]:
 
 
 # ---------------------------------------------------------------------------
-# Win32 click injection — SendMessage WM_LBUTTONDOWN/UP
+# Win32 click injection â€” SendMessage WM_LBUTTONDOWN/UP
 # ---------------------------------------------------------------------------
 
 _WM_LBUTTONDOWN = 0x0201
 _WM_LBUTTONUP = 0x0202
+_WM_MOUSEMOVE = 0x0200
 _MK_LBUTTON = 0x0001
 
 
@@ -160,7 +132,7 @@ def _win32_click_on_hwnd(
     ``WM_LBUTTONUP`` directly to the HWND.
 
     This approach bypasses the Android guest entirely and injects
-    hardware-level click events into LDPlayer's DirectX render surface.
+    hardware-level click events into the emulator's render surface.
     Unity (PPPoker) cannot distinguish this from a physical mouse click.
 
     Works even if the window is in the background (non-foreground).
@@ -188,7 +160,11 @@ def _win32_click_on_hwnd(
     # LPARAM = (y << 16) | x
     lparam = (py << 16) | (px & 0xFFFF)
 
-    # SendMessage is synchronous — guaranteed delivery
+    # WM_MOUSEMOVE first â€” some DirectX hosts require a move event
+    # before a click event is registered by the guest.
+    _user32.SendMessageW(hwnd, _WM_MOUSEMOVE, 0, lparam)
+    time.sleep(0.02)
+    # SendMessage is synchronous â€” guaranteed delivery
     _user32.SendMessageW(hwnd, _WM_LBUTTONDOWN, _MK_LBUTTON, lparam)
     time.sleep(uniform(0.035, 0.065))  # human-like hold
     _user32.SendMessageW(hwnd, _WM_LBUTTONUP, 0, lparam)
@@ -218,6 +194,8 @@ def _win32_postmessage_click(
     py = max(0, min(int(android_y / android_h * client_h), client_h - 1))
     lparam = (py << 16) | (px & 0xFFFF)
 
+    _user32.PostMessageW(hwnd, _WM_MOUSEMOVE, 0, lparam)
+    time.sleep(0.02)
     _user32.PostMessageW(hwnd, _WM_LBUTTONDOWN, _MK_LBUTTON, lparam)
     time.sleep(uniform(0.035, 0.065))
     _user32.PostMessageW(hwnd, _WM_LBUTTONUP, 0, lparam)
@@ -225,55 +203,59 @@ def _win32_postmessage_click(
 
 
 # ---------------------------------------------------------------------------
-# LDConsole click injection
+# ADB device auto-detection (safe â€” no daemon restart)
 # ---------------------------------------------------------------------------
 
-_LDCONSOLE_PATHS = [
-    r"F:\LDPlayer\LDPlayer9\ldconsole.exe",
-    r"C:\LDPlayer\LDPlayer9\ldconsole.exe",
-    r"C:\Program Files\LDPlayer\LDPlayer9\ldconsole.exe",
-]
+def _auto_detect_adb_device(adb_exe: str, fallback: str = "emulator-5554") -> str:
+    """Detect the first connected ADB device without restarting the daemon.
+
+    Returns the device serial (e.g. ``emulator-5554`` or ``127.0.0.1:37248``).
+    Falls back to *fallback* if no device is found.
+    """
+    if not os.path.isfile(adb_exe):
+        return fallback
+    try:
+        res = subprocess.run(
+            [adb_exe, "devices"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith("List") or line.startswith("*"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                return parts[0]
+    except Exception:
+        pass
+    return fallback
 
 
-def _find_ldconsole() -> str | None:
-    """Find the ldconsole.exe executable."""
-    custom = os.getenv("TITAN_LDCONSOLE_PATH", "").strip()
-    if custom and os.path.isfile(custom):
-        return custom
-    for p in _LDCONSOLE_PATHS:
-        if os.path.isfile(p):
-            return p
-    return None
+# ---------------------------------------------------------------------------
+# Console CLI click injection (emulator-agnostic)
+# ---------------------------------------------------------------------------
 
 
-def _ldconsole_tap(
-    ldconsole_exe: str,
+def _find_console_exe(profile: EmulatorProfile | None = None) -> str | None:
+    """Find the emulator's console/manager CLI executable."""
+    return _profile_find_console_exe(profile)
+
+
+def _console_tap(
+    console_exe: str,
     android_x: int,
     android_y: int,
     emu_index: int = 0,
+    profile: EmulatorProfile | None = None,
 ) -> bool:
-    """Tap via LDConsole host API (bypasses Android guest entirely).
+    """Tap via the emulator's console CLI (bypasses Android guest).
 
-    Uses ``ldconsole.exe action --index <N> --key call.input --value "X Y"``
-    which injects the tap through the emulator's own DirectX/VirtIO pipeline.
-    This is the officially supported LDPlayer automation interface.
+    Delegates to the emulator profile system which knows the correct
+    CLI syntax for each emulator (MuMuManager.exe, ldconsole.exe, etc.).
     """
-    try:
-        result = subprocess.run(
-            [
-                ldconsole_exe,
-                "action",
-                "--index", str(emu_index),
-                "--key", "call.input",
-                "--value", f"{android_x} {android_y}",
-            ],
-            timeout=5,
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    return _profile_console_tap(
+        console_exe, android_x, android_y, emu_index, profile
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +271,7 @@ def _discover_digitizer_axes(
         (x_min, x_max, y_min, y_max, event_device_path)
 
     Defaults to (0, 1279, 0, 719, "/dev/input/event2") if discovery fails.
-    In LDPlayer the digitizer is rotated 90 degrees:
+    In the emulator the digitizer is rotated 90 degrees:
       - ABS_MT_POSITION_X range [0, 1279] maps to display Y (portrait).
       - ABS_MT_POSITION_Y range [0,  719] maps to display X (portrait).
     """
@@ -341,7 +323,7 @@ def _discover_digitizer_axes(
 
 
 # ---------------------------------------------------------------------------
-# Persistent ADB shell — best-in-class click injection
+# Persistent ADB shell â€” best-in-class click injection
 # ---------------------------------------------------------------------------
 
 _log_mod = TitanLogger("PersistentADBShell")
@@ -353,8 +335,8 @@ class PersistentADBShell:
     **Why this matters**: every ``subprocess.run(["adb", ..., "shell",
     "input", "tap", ...])`` spawns a new process, connects to the ADB
     daemon, opens a shell, runs the command, and tears it all down.
-    That takes ~200–400 ms on Windows.  A persistent shell eliminates
-    the startup overhead: commands reach the device in ~5–15 ms.
+    That takes ~200â€“400 ms on Windows.  A persistent shell eliminates
+    the startup overhead: commands reach the device in ~5â€“15 ms.
 
     This is the same approach used by professional automation frameworks
     (OpenSTF, Appium UiAutomator2 bootstrap, scrcpy input injection).
@@ -369,7 +351,7 @@ class PersistentADBShell:
         self._lock = threading.Lock()
         self._alive = False
 
-    # ── lifecycle ───────────────────────────────────────────────────
+    # â”€â”€ lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def start(self) -> bool:
         """Open the persistent ``adb shell`` subprocess.
@@ -427,13 +409,13 @@ class PersistentADBShell:
                 return False
             return True
 
-    # ── command execution ───────────────────────────────────────────
+    # â”€â”€ command execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def send(self, cmd: str, *, timeout: float = 5.0) -> bool:
         """Send a shell command (newline-terminated) via stdin.
 
         Returns ``True`` if the command was written successfully.
-        Does NOT wait for output — ``input tap`` produces none.
+        Does NOT wait for output â€” ``input tap`` produces none.
         """
         with self._lock:
             if not self._alive or not self._proc:
@@ -476,7 +458,7 @@ class PersistentADBShell:
         This writes directly to the kernel input device, bypassing
         Android's InputManager.
 
-        **Critical axis mapping (LDPlayer VirtIO digitizer):**
+        **Critical axis mapping (VirtIO digitizer):**
         The digitizer is rotated 90 degrees from the display:
           - ABS_MT_POSITION_X (code 0x35): range [0, axis_x_max]
             maps to **display Y** (portrait axis).
@@ -576,11 +558,11 @@ class CurvePoint:
 
 
 # ---------------------------------------------------------------------------
-# Bézier maths
+# BÃ©zier maths
 # ---------------------------------------------------------------------------
 
 def _bezier_point(t: float, p0: CurvePoint, p1: CurvePoint, p2: CurvePoint, p3: CurvePoint) -> CurvePoint:
-    """Evaluate a cubic Bézier curve at parameter *t* ∈ [0, 1]."""
+    """Evaluate a cubic BÃ©zier curve at parameter *t* âˆˆ [0, 1]."""
     u = 1.0 - t
     u2 = u * u
     t2 = t * t
@@ -601,7 +583,7 @@ def _generate_bezier_path(
     noise_amp: float = 3.0,
     density: int = 18,
 ) -> list[CurvePoint]:
-    """Return a list of waypoints along a noisy cubic Bézier from *start* to *end*."""
+    """Return a list of waypoints along a noisy cubic BÃ©zier from *start* to *end*."""
     dx = end.x - start.x
     dy = end.y - start.y
     distance = math.hypot(dx, dy)
@@ -668,13 +650,13 @@ def classify_difficulty_by_equity(action: str, street: str = "preflop", equity: 
 
 
 # ---------------------------------------------------------------------------
-# Velocity curve — ease-in/ease-out
+# Velocity curve â€” ease-in/ease-out
 # ---------------------------------------------------------------------------
 
 def _ease_in_out(t: float, strength: float = 2.2) -> float:
     """Sinusoidal ease-in/ease-out curve.
 
-    Maps parameter t ∈ [0, 1] to a new t' that:
+    Maps parameter t âˆˆ [0, 1] to a new t' that:
     - Starts slow (ease-in at the beginning)
     - Accelerates in the middle
     - Decelerates at the end (ease-out near the target)
@@ -696,19 +678,19 @@ def _ease_in_out(t: float, strength: float = 2.2) -> float:
 # ---------------------------------------------------------------------------
 
 class GhostMouse:
-    """Controlador humanizado de mouse com curvas de Bézier e timing variável.
+    """Controlador humanizado de mouse com curvas de BÃ©zier e timing variÃ¡vel.
 
-    O GhostMouse converte coordenadas **relativas à janela do emulador**
+    O GhostMouse converte coordenadas **relativas Ã  janela do emulador**
     em coordenadas absolutas da tela antes de mover o cursor, garantindo
     que cliques sempre caiam dentro da janela correta.
 
-    Ativação
+    AtivaÃ§Ã£o
     --------
-    O controle real do mouse só acontece quando:
-      - ``PyAutoGUI`` está instalado, E
-      - ``TITAN_GHOST_MOUSE=1`` está definido.
+    O controle real do mouse sÃ³ acontece quando:
+      - ``PyAutoGUI`` estÃ¡ instalado, E
+      - ``TITAN_GHOST_MOUSE=1`` estÃ¡ definido.
 
-    Caso contrário, os métodos calculam delays e paths sem mover o cursor
+    Caso contrÃ¡rio, os mÃ©todos calculam delays e paths sem mover o cursor
     (modo seguro para CI / testes).
     """
 
@@ -716,27 +698,34 @@ class GhostMouse:
         self._log = TitanLogger("GhostMouse")
         self.config = config or GhostMouseConfig()
 
-        # ── Input backend selection ─────────────────────────────────
+        # â”€â”€ Emulator profile â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        self._emu_profile = _get_emu_profile()
+
+        # â”€â”€ Input backend selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self._input_backend = os.getenv(
             "TITAN_INPUT_BACKEND", "pyautogui"
         ).strip().lower()
+        # Normalise: both "ldplayer" and "mumu" use the same emulator
+        # click chain â€” the profile system handles the differences.
+        if self._input_backend in ("ldplayer", "mumu"):
+            self._input_backend = "emulator"
 
         self._enabled = False
         self._adb_exe = ""
         self._adb_device = ""
 
-        # LDPlayer render window handle (auto-discovered)
-        self._ld_render_hwnd: int | None = None
-        # Android native resolution (720x1280 default for LDPlayer)
-        self._ld_android_w: int = 720
-        self._ld_android_h: int = 1280
+        # Emulator render window handle (auto-discovered via profile)
+        self._render_hwnd: int | None = None
+        # Android native resolution (720x1280 default)
+        self._android_w: int = 720
+        self._android_h: int = 1280
 
         # Persistent ADB shell (initialised lazily on first click)
         self._persistent_shell: PersistentADBShell | None = None
 
-        # LDConsole path (discovered lazily)
-        self._ldconsole_exe: str | None = None
-        self._ldconsole_emu_index: int = 0
+        # Console CLI path (discovered lazily via profile)
+        self._console_exe: str | None = None
+        self._emu_index: int = 0
 
         # Digitizer axis limits (discovered from getevent -p)
         self._digitizer_x_max: int = 1279
@@ -748,40 +737,47 @@ class GhostMouse:
         self._click_stats = {
             "win32_sendmessage": 0,
             "win32_postmessage": 0,
-            "ldconsole_ok": 0,
+            "console_ok": 0,
             "persistent_ok": 0,
             "subprocess_fallback": 0,
             "sendevent_fallback": 0,
             "total_failures": 0,
         }
 
-        # ADB settings shared by both ldplayer and adb backends
+        # ADB settings â€” resolved from profile
+        _adb_from_profile = _profile_find_adb_exe(self._emu_profile)
         self._adb_exe = os.getenv(
-            "TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe"
+            "TITAN_ADB_PATH",
+            _adb_from_profile or "",
         ).strip()
-        self._adb_device = os.getenv(
-            "TITAN_ADB_DEVICE", "emulator-5554"
-        ).strip()
+        # ADB device serial â€” resolved lazily to avoid calling `adb devices`
+        # during init, which restarts the ADB daemon and kills the emulator's
+        # virtual network bridge (dropping PPPoker's internet).
+        _env_device = os.getenv("TITAN_ADB_DEVICE", "").strip()
+        self._adb_device = _env_device or ""  # empty = lazy-detect later
+        self._adb_device_resolved = bool(_env_device)  # True if already known
 
-        if self._input_backend == "ldplayer":
-            self._ld_render_hwnd = _find_ldplayer_render_hwnd()
-            self._ld_android_w = int(os.getenv("TITAN_ANDROID_W", "720"))
-            self._ld_android_h = int(os.getenv("TITAN_ANDROID_H", "1280"))
-            self._ldconsole_exe = _find_ldconsole()
-            self._ldconsole_emu_index = int(os.getenv("TITAN_LDCONSOLE_INDEX", "0"))
+        if self._input_backend == "emulator":
+            self._render_hwnd = _find_emulator_render_hwnd(self._emu_profile)
+            self._android_w = int(os.getenv("TITAN_ANDROID_W", "720"))
+            self._android_h = int(os.getenv("TITAN_ANDROID_H", "1280"))
+            self._console_exe = _find_console_exe(self._emu_profile)
+            self._emu_index = int(os.getenv("TITAN_EMU_INDEX", "0"))
             self._enabled = os.getenv(
                 "TITAN_GHOST_MOUSE", "0"
             ).strip().lower() in {"1", "true", "yes", "on"}
 
-            # Discover digitizer axes in background (don't block init)
-            self._discover_digitizer_async()
+            # NOTE: Digitizer discovery deferred â€” it calls ADB which
+            # restarts the daemon and kills the emulator network bridge.
+            # Discovery will happen lazily on the first sendevent_tap()
+            # (strategy 5 â€” rarely needed; strategies 1-2 are ADB-free).
 
             self._log.info(
-                f"LDPlayer backend v3: "
-                f"render_hwnd={self._ld_render_hwnd} "
-                f"android={self._ld_android_w}x{self._ld_android_h} "
-                f"adb={self._adb_exe} device={self._adb_device} "
-                f"ldconsole={self._ldconsole_exe} "
+                f"{self._emu_profile.display_name} backend (ADB-free init): "
+                f"render_hwnd={self._render_hwnd} "
+                f"android={self._android_w}x{self._android_h} "
+                f"adb={self._adb_exe} device={self._adb_device or '(lazy)'} "
+                f"console={self._console_exe} "
                 f"enabled={self._enabled}"
             )
         elif self._input_backend == "adb":
@@ -802,6 +798,24 @@ class GhostMouse:
 
     # -- Lifecycle -----------------------------------------------------------
 
+    def _resolve_adb_device(self) -> str:
+        """Lazily resolve the ADB device serial.
+
+        Called only when an ADB-based operation is actually needed
+        (strategies 3-5 in the click chain).  This avoids calling
+        ``adb devices`` during ``__init__()`` which restarts the ADB
+        daemon and kills the LDPlayer network bridge.
+        """
+        if self._adb_device_resolved:
+            return self._adb_device
+
+        self._adb_device = _auto_detect_adb_device(
+            self._adb_exe, fallback=self._emu_profile.default_adb_device or "127.0.0.1:16384"
+        )
+        self._adb_device_resolved = True
+        self._log.info(f"ADB device lazily resolved: {self._adb_device}")
+        return self._adb_device
+
     def shutdown(self) -> None:
         """Terminate the persistent ADB shell cleanly."""
         if self._persistent_shell is not None:
@@ -815,11 +829,36 @@ class GhostMouse:
         Runs in a daemon thread so it doesn't block initialization.
         The results are used by ``sendevent_tap`` for correct axis
         interpolation.  If discovery fails, defaults are used.
+
+        **IMPORTANT**: This calls ADB.  Only invoke this method when an
+        ADB-based click strategy is actually needed (not during init).
         """
         def _worker():
+            # Resolve ADB device lazily (may call `adb devices`)
+            device = self._resolve_adb_device()
+
+            # Safety check: verify device is actually reachable before
+            # calling getevent -p (avoids ADB daemon restart)
+            if not os.path.isfile(self._adb_exe):
+                self._log.warning("ADB exe not found â€” skipping digitizer discovery")
+                return
+            try:
+                probe = subprocess.run(
+                    [self._adb_exe, "-s", device, "shell", "echo", "ok"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if "ok" not in (probe.stdout or ""):
+                    self._log.warning(
+                        f"ADB device {device} unreachable â€” skipping digitizer discovery"
+                    )
+                    return
+            except Exception as exc:
+                self._log.warning(f"ADB probe failed â€” skipping digitizer discovery: {exc}")
+                return
+
             try:
                 x_min, x_max, y_min, y_max, dev = _discover_digitizer_axes(
-                    self._adb_exe, self._adb_device
+                    self._adb_exe, device
                 )
                 self._digitizer_x_max = x_max
                 self._digitizer_y_max = y_max
@@ -842,29 +881,29 @@ class GhostMouse:
         """Return a copy of the click method usage statistics."""
         return dict(self._click_stats)
 
-    # -- Configuração da janela do emulador ----------------------------------
+    # -- ConfiguraÃ§Ã£o da janela do emulador ----------------------------------
 
     def set_window_offset(self, left: int, top: int) -> None:
-        """Define o offset da janela do emulador para conversão de coordenadas.
+        """Define o offset da janela do emulador para conversÃ£o de coordenadas.
 
-        Deve ser chamado pelo agente a cada ciclo, após localizar a janela,
-        para que ``move_and_click`` converta coords relativas → absolutas.
+        Deve ser chamado pelo agente a cada ciclo, apÃ³s localizar a janela,
+        para que ``move_and_click`` converta coords relativas â†’ absolutas.
 
         Args:
-            left: Posição X da janela na tela.
-            top:  Posição Y da janela na tela.
+            left: PosiÃ§Ã£o X da janela na tela.
+            top:  PosiÃ§Ã£o Y da janela na tela.
         """
         self._window_left = left
         self._window_top = top
 
     def _to_screen(self, point: ClickPoint) -> ClickPoint:
-        """Converte ponto relativo à janela → absoluto na tela."""
+        """Converte ponto relativo Ã  janela â†’ absoluto na tela."""
         return ClickPoint(
             x=point.x + self._window_left,
             y=point.y + self._window_top,
         )
 
-    # -- API pública ---------------------------------------------------------
+    # -- API pÃºblica ---------------------------------------------------------
 
     def move_and_click(
         self,
@@ -873,17 +912,17 @@ class GhostMouse:
         relative: bool = True,
         action_name: str = "",
     ) -> float:
-        """Move o cursor até *point* via Bézier, clica e retorna o delay de "pensamento" (segundos).
+        """Move o cursor atÃ© *point* via BÃ©zier, clica e retorna o delay de "pensamento" (segundos).
 
         Args:
-            point:      Coordenada do clique. Se ``relative=True`` (padrão),
-                        é relativa à janela do emulador.
-            difficulty: Nível de dificuldade para calcular o delay humano.
+            point:      Coordenada do clique. Se ``relative=True`` (padrÃ£o),
+                        Ã© relativa Ã  janela do emulador.
+            difficulty: NÃ­vel de dificuldade para calcular o delay humano.
             relative:   Se ``True``, aplica o offset da janela do emulador
                         antes de mover o cursor.
 
         Returns:
-            O delay de "pensamento" em segundos (já aguardado internamente).
+            O delay de "pensamento" em segundos (jÃ¡ aguardado internamente).
         """
         delay = self.thinking_delay(difficulty)
         target = self._to_screen(point) if relative else point
@@ -894,8 +933,8 @@ class GhostMouse:
         )
 
         if self._enabled:
-            if self._input_backend == "ldplayer":
-                self._execute_ldplayer_click(point, delay)
+            if self._input_backend == "emulator":
+                self._execute_emulator_click(point, delay)
             elif self._input_backend == "adb":
                 self._execute_adb_tap(point, delay)
             elif pyautogui is not None:
@@ -911,7 +950,7 @@ class GhostMouse:
         action_name: str = "",
         inter_click_delay: tuple[float, float] = (0.3, 0.7),
     ) -> float:
-        """Execute a multi-step click sequence (e.g. open modal → select preset → confirm).
+        """Execute a multi-step click sequence (e.g. open modal â†’ select preset â†’ confirm).
 
         Each point is clicked in order with a random humanised pause
         between clicks.  The *thinking delay* is applied only before the
@@ -942,8 +981,8 @@ class GhostMouse:
             )
 
             if self._enabled:
-                if self._input_backend == "ldplayer":
-                    self._execute_ldplayer_click(pt, 0.0)
+                if self._input_backend == "emulator":
+                    self._execute_emulator_click(pt, 0.0)
                 elif self._input_backend == "adb":
                     self._execute_adb_tap(pt, 0.0)
                 elif pyautogui is not None:
@@ -958,7 +997,7 @@ class GhostMouse:
         return total_delay
 
     def compute_path(self, start: ClickPoint, end: ClickPoint) -> list[CurvePoint]:
-        """Retorna os waypoints Bézier sem executar movimentação (útil para debug/testes)."""
+        """Retorna os waypoints BÃ©zier sem executar movimentaÃ§Ã£o (Ãºtil para debug/testes)."""
         return _generate_bezier_path(
             CurvePoint(start.x, start.y),
             CurvePoint(end.x, end.y),
@@ -970,12 +1009,12 @@ class GhostMouse:
     # -- Helpers internos ----------------------------------------------------
 
     def thinking_delay(self, difficulty: str) -> float:
-        """Retorna um delay baseado em distribuição de Poisson modulada pela dificuldade.
+        """Retorna um delay baseado em distribuiÃ§Ã£o de Poisson modulada pela dificuldade.
 
-        Se Poisson está desativado, usa distribuição uniforme (legacy).
-        O delay Poisson produz uma distribuição mais realista: a maioria
-        dos tempos fica perto da média, com caudas longas ocasionais
-        (jogador que demora muito pensando em um spot difícil).
+        Se Poisson estÃ¡ desativado, usa distribuiÃ§Ã£o uniforme (legacy).
+        O delay Poisson produz uma distribuiÃ§Ã£o mais realista: a maioria
+        dos tempos fica perto da mÃ©dia, com caudas longas ocasionais
+        (jogador que demora muito pensando em um spot difÃ­cil).
         """
         if self.config.poisson_delay_enabled:
             # Use Poisson-inspired delay via exponential distribution
@@ -1017,14 +1056,14 @@ class GhostMouse:
         return max(self.config.click_hold_min, min(raw, self.config.click_hold_max))
 
     def _execute_move_and_click(self, target: ClickPoint) -> None:
-        """Executa movimento Bézier real + clique via PyAutoGUI.
+        """Executa movimento BÃ©zier real + clique via PyAutoGUI.
 
         O cursor percorre a curva interpolada com um perfil de velocidade
-        ease-in/ease-out (aceleração natural no meio, desaceleração no
-        alvo).  Opcionalmente adiciona micro-overshoots e correções.
+        ease-in/ease-out (aceleraÃ§Ã£o natural no meio, desaceleraÃ§Ã£o no
+        alvo).  Opcionalmente adiciona micro-overshoots e correÃ§Ãµes.
 
-        O clique usa duração log-normal ao invés de uniforme para
-        mimetizar timing humano de soltar o botão.
+        O clique usa duraÃ§Ã£o log-normal ao invÃ©s de uniforme para
+        mimetizar timing humano de soltar o botÃ£o.
         """
         if pyautogui is None:
             raise RuntimeError(
@@ -1062,8 +1101,8 @@ class GhostMouse:
                         _ease_in_out(t_next, self.config.velocity_ease_strength)
                         - _ease_in_out(t, self.config.velocity_ease_strength)
                     )
-                    # Larger dt_eased means faster → shorter pause
-                    # Smaller dt_eased means slower → longer pause
+                    # Larger dt_eased means faster â†’ shorter pause
+                    # Smaller dt_eased means slower â†’ longer pause
                     base_step = total_duration / max(n, 1)
                     # Inverse relationship: slow at edges, fast in middle
                     speed_factor = max(dt_eased * n, 0.3)
@@ -1077,7 +1116,7 @@ class GhostMouse:
 
             pyautogui.sleep(step_pause)
 
-        # ── Micro-overshoot ─────────────────────────────────────────
+        # â”€â”€ Micro-overshoot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # With some probability, overshoot past the target then correct.
         # This mimics human hand motor control inaccuracy.
         if random() < self.config.overshoot_probability:
@@ -1103,7 +1142,7 @@ class GhostMouse:
                 pyautogui.moveTo(int(cpt.x), int(cpt.y), _pause=False)
                 pyautogui.sleep(0.003)
 
-        # ── Click with log-normal hold ──────────────────────────────
+        # â”€â”€ Click with log-normal hold â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         jitter = self.config.click_jitter_px
         final_x = int(target.x + gauss(0, jitter))
         final_y = int(target.y + gauss(0, jitter))
@@ -1117,7 +1156,7 @@ class GhostMouse:
         """Send a tap via ADB ``shell input tap`` (persistent shell first).
 
         The *pre_delay* (thinking time) is applied before the tap to
-        maintain humanised timing even though ADB skips the Bézier path.
+        maintain humanised timing even though ADB skips the BÃ©zier path.
         Small random jitter is added to the coordinates.
         """
         if pre_delay > 0:
@@ -1177,24 +1216,27 @@ class GhostMouse:
             time.sleep(0.25)
 
     def _ensure_persistent_shell(self) -> PersistentADBShell:
-        """Lazily initialise (or restart) the persistent ADB shell."""
+        """Lazily initialise (or restart) the persistent ADB shell.
+
+        Also triggers lazy ADB device resolution if not yet done.
+        """
+        device = self._resolve_adb_device()
         if self._persistent_shell is None or not self._persistent_shell.is_alive:
             self._persistent_shell = _get_persistent_shell(
-                self._adb_exe, self._adb_device
+                self._adb_exe, device
             )
         return self._persistent_shell
 
-    def _execute_ldplayer_click(self, point: ClickPoint, pre_delay: float = 0.0) -> None:
-        """Click inside LDPlayer via 5-strategy fallback chain.
+    def _execute_emulator_click(self, point: ClickPoint, pre_delay: float = 0.0) -> None:
+        """Click inside emulator via 5-strategy fallback chain.
 
         Fallback order (most reliable for Unity/PPPoker first):
 
           1. **Win32 SendMessage** -- sends WM_LBUTTONDOWN/UP directly
-             to the RenderWindow HWND.  Unity cannot distinguish this
+             to the render surface HWND.  Unity cannot distinguish this
              from a physical mouse click.  Works in background.
-          2. **LDConsole API** -- ``ldconsole.exe action --index N --key
-             call.input --value "X Y"``.  Injects via the emulator's
-             own host pipeline, bypassing Android entirely.
+          2. **Console API** -- emulator's CLI tool injects via host
+             pipeline, bypassing Android entirely.
           3. **Persistent ADB shell** -- ``input touchscreen tap`` piped
              via stdin to a long-lived ``adb shell`` process (~10 ms).
           4. **New subprocess** -- classic ``subprocess.run()`` (~300 ms).
@@ -1210,17 +1252,17 @@ class GhostMouse:
         tx = int(point.x + gauss(0, jitter))
         ty = int(point.y + gauss(0, jitter))
 
-        # ── Strategy 1: Win32 SendMessage (nuclear, most reliable) ──
-        if self._ld_render_hwnd is not None:
+        # â”€â”€ Strategy 1: Win32 SendMessage (nuclear, most reliable) â”€â”€
+        if self._render_hwnd is not None:
             try:
                 if _win32_click_on_hwnd(
-                    self._ld_render_hwnd, tx, ty,
-                    self._ld_android_w, self._ld_android_h,
+                    self._render_hwnd, tx, ty,
+                    self._android_w, self._android_h,
                 ):
                     self._click_stats["win32_sendmessage"] += 1
                     self._log.info(
-                        f"ldplayer click ({tx},{ty}) via Win32 SendMessage "
-                        f"hwnd={self._ld_render_hwnd:#x} "
+                        f"emulator click ({tx},{ty}) via Win32 SendMessage "
+                        f"hwnd={self._render_hwnd:#x} "
                         f"[stats: sm={self._click_stats['win32_sendmessage']}]"
                     )
                     return
@@ -1230,12 +1272,12 @@ class GhostMouse:
             # Try PostMessage as Win32 fallback
             try:
                 if _win32_postmessage_click(
-                    self._ld_render_hwnd, tx, ty,
-                    self._ld_android_w, self._ld_android_h,
+                    self._render_hwnd, tx, ty,
+                    self._android_w, self._android_h,
                 ):
                     self._click_stats["win32_postmessage"] += 1
                     self._log.info(
-                        f"ldplayer click ({tx},{ty}) via Win32 PostMessage "
+                        f"emulator click ({tx},{ty}) via Win32 PostMessage "
                         f"[stats: pm={self._click_stats['win32_postmessage']}]"
                     )
                     return
@@ -1243,54 +1285,55 @@ class GhostMouse:
                 self._log.warning(f"Win32 PostMessage failed: {exc}")
         else:
             # Try to rediscover the HWND (window might have been created after init)
-            self._ld_render_hwnd = _find_ldplayer_render_hwnd()
-            if self._ld_render_hwnd is not None:
+            self._render_hwnd = _find_emulator_render_hwnd(self._emu_profile)
+            if self._render_hwnd is not None:
                 self._log.info(
-                    f"Late-discovered LDPlayer HWND: {self._ld_render_hwnd:#x}"
+                    f"Late-discovered {self._emu_profile.display_name} HWND: {self._render_hwnd:#x}"
                 )
                 # Retry with the newly found HWND
                 try:
                     if _win32_click_on_hwnd(
-                        self._ld_render_hwnd, tx, ty,
-                        self._ld_android_w, self._ld_android_h,
+                        self._render_hwnd, tx, ty,
+                        self._android_w, self._android_h,
                     ):
                         self._click_stats["win32_sendmessage"] += 1
                         self._log.info(
-                            f"ldplayer click ({tx},{ty}) via Win32 SendMessage (late HWND)"
+                            f"emulator click ({tx},{ty}) via Win32 SendMessage (late HWND)"
                         )
                         return
                 except Exception:
                     pass
 
-        # ── Strategy 2: LDConsole API (host-side bypass) ────────────
-        if self._ldconsole_exe:
+        # â”€â”€ Strategy 2: Console API (host-side bypass) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        if self._console_exe:
             try:
-                if _ldconsole_tap(
-                    self._ldconsole_exe, tx, ty,
-                    self._ldconsole_emu_index,
+                if _console_tap(
+                    self._console_exe, tx, ty,
+                    self._emu_index,
+                    self._emu_profile,
                 ):
-                    self._click_stats["ldconsole_ok"] += 1
+                    self._click_stats["console_ok"] += 1
                     self._log.info(
-                        f"ldplayer click ({tx},{ty}) via ldconsole "
-                        f"[stats: ldc={self._click_stats['ldconsole_ok']}]"
+                        f"emulator click ({tx},{ty}) via console "
+                        f"[stats: con={self._click_stats['console_ok']}]"
                     )
                     return
                 else:
-                    self._log.warning("ldconsole tap returned non-zero exit code")
+                    self._log.warning("console tap returned non-zero exit code")
             except Exception as exc:
-                self._log.warning(f"ldconsole tap failed: {exc}")
+                self._log.warning(f"console tap failed: {exc}")
 
-        # ── Strategy 3: persistent shell (fastest ADB, ~10 ms) ──────
+        # â”€â”€ Strategy 3: persistent shell (fastest ADB, ~10 ms) â”€â”€â”€â”€â”€â”€
         shell = self._ensure_persistent_shell()
         if shell.tap(tx, ty):
             self._click_stats["persistent_ok"] += 1
             self._log.info(
-                f"ldplayer click ({tx},{ty}) via persistent shell "
+                f"emulator click ({tx},{ty}) via persistent shell "
                 f"[stats: ok={self._click_stats['persistent_ok']}]"
             )
             return
 
-        # ── Strategy 4: new subprocess fallback (~300 ms) ───────────
+        # â”€â”€ Strategy 4: new subprocess fallback (~300 ms) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self._log.warning(
             f"persistent shell unavailable -- falling back to subprocess"
         )
@@ -1303,38 +1346,38 @@ class GhostMouse:
             )
             self._click_stats["subprocess_fallback"] += 1
             self._log.info(
-                f"ldplayer click ({tx},{ty}) via subprocess fallback"
+                f"emulator click ({tx},{ty}) via subprocess fallback"
             )
             return
         except Exception as exc:
             self._log.warning(f"subprocess tap also failed: {exc}")
 
-        # ── Strategy 5: raw sendevent (kernel bypass with axis interp) ──
+        # â”€â”€ Strategy 5: raw sendevent (kernel bypass with axis interp) â”€â”€
         self._log.warning("trying sendevent fallback (kernel bypass)")
         shell = self._ensure_persistent_shell()
         if shell.sendevent_tap(
             tx, ty,
             device=self._digitizer_device,
-            display_w=self._ld_android_w,
-            display_h=self._ld_android_h,
+            display_w=self._android_w,
+            display_h=self._android_h,
             axis_x_max=self._digitizer_x_max,
             axis_y_max=self._digitizer_y_max,
         ):
             self._click_stats["sendevent_fallback"] += 1
             self._log.info(
-                f"ldplayer click ({tx},{ty}) via sendevent "
-                f"(touch_x={int(ty / self._ld_android_h * self._digitizer_x_max)}, "
-                f"touch_y={int(tx / self._ld_android_w * self._digitizer_y_max)})"
+                f"emulator click ({tx},{ty}) via sendevent "
+                f"(touch_x={int(ty / self._android_h * self._digitizer_x_max)}, "
+                f"touch_y={int(tx / self._android_w * self._digitizer_y_max)})"
             )
             return
 
-        # ── All strategies exhausted ────────────────────────────────
+        # â”€â”€ All strategies exhausted â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self._click_stats["total_failures"] += 1
         self._log.error(
             f"ALL 5 click strategies failed at ({tx},{ty}) "
             f"[failures={self._click_stats['total_failures']}] "
-            f"hwnd={self._ld_render_hwnd} "
-            f"ldconsole={self._ldconsole_exe} "
+            f"hwnd={self._render_hwnd} "
+            f"console={self._console_exe} "
             f"adb={self._adb_exe}"
         )
 
@@ -1347,14 +1390,14 @@ class GhostMouse:
     ) -> float:
         """Execute a swipe (drag) gesture from *start* to *end*.
 
-        On the ``ldplayer`` backend this performs a real mouse drag on the
-        Win32 render surface — essential for PPPoker's raise slider.
+        On the ``emulator`` backend this performs a real mouse drag on the
+        Win32 render surface â€” essential for PPPoker's raise slider.
 
         On the ``adb`` backend it uses ``adb shell input swipe``.
 
-        On the ``pyautogui`` backend it uses a Bézier-smoothed drag.
+        On the ``pyautogui`` backend it uses a BÃ©zier-smoothed drag.
 
-        Coordinates are in **Android native resolution** (720×1280).
+        Coordinates are in **Android native resolution** (720Ã—1280).
 
         Args:
             start:       Start coordinate of the swipe.
@@ -1375,8 +1418,8 @@ class GhostMouse:
         if not self._enabled:
             return duration
 
-        if self._input_backend == "ldplayer":
-            self._execute_ldplayer_swipe(start, end, duration)
+        if self._input_backend == "emulator":
+            self._execute_emulator_swipe(start, end, duration)
         elif self._input_backend == "adb":
             self._execute_adb_swipe(start, end, duration)
         elif pyautogui is not None:
@@ -1384,15 +1427,15 @@ class GhostMouse:
 
         return duration
 
-    def _execute_ldplayer_swipe(
+    def _execute_emulator_swipe(
         self,
         start: ClickPoint,
         end: ClickPoint,
         duration: float,
     ) -> None:
-        """Swipe inside LDPlayer via persistent shell or subprocess fallback.
+        """Swipe inside emulator via persistent shell or subprocess fallback.
 
-        Uses the same persistent shell as ``_execute_ldplayer_click``
+        Uses the same persistent shell as ``_execute_emulator_click``
         for ~10 ms latency on the command dispatch.  Falls back to
         ``subprocess.run`` if the shell is unavailable.
         """
@@ -1407,7 +1450,7 @@ class GhostMouse:
         shell = self._ensure_persistent_shell()
         if shell.swipe(sx1, sy1, sx2, sy2, dur_ms):
             self._log.info(
-                f"ldplayer swipe ({sx1},{sy1})→({sx2},{sy2}) "
+                f"emulator swipe ({sx1},{sy1})â†’({sx2},{sy2}) "
                 f"dur={dur_ms}ms via persistent shell"
             )
             return
@@ -1422,11 +1465,11 @@ class GhostMouse:
                 capture_output=True,
             )
             self._log.info(
-                f"ldplayer swipe ({sx1},{sy1})→({sx2},{sy2}) "
+                f"emulator swipe ({sx1},{sy1})â†’({sx2},{sy2}) "
                 f"dur={dur_ms}ms via subprocess fallback"
             )
         except Exception as exc:
-            self._log.error(f"LDPlayer swipe failed: {exc}")
+            self._log.error(f"Emulator swipe failed: {exc}")
 
     def _execute_adb_swipe(
         self,
@@ -1469,7 +1512,7 @@ class GhostMouse:
         end: ClickPoint,
         duration: float,
     ) -> None:
-        """Execute a swipe via pyautogui drag with Bézier smoothing."""
+        """Execute a swipe via pyautogui drag with BÃ©zier smoothing."""
         if pyautogui is None:
             return
 
@@ -1498,31 +1541,51 @@ class GhostMouse:
         pyautogui.mouseUp(_pause=False)
 
     def take_screenshot(self) -> bytes | None:
-        """Capture a screenshot from the Android device via ADB.
+        """Capture a screenshot from the emulator render window via mss.
 
-        Returns the raw PNG bytes, or ``None`` on failure.  This works
-        even on PPPoker because ``screencap`` uses the framebuffer (not
-        input injection), so Unity's anti-automation does not block it.
+        Returns the raw PNG bytes, or ``None`` on failure.
+
+        **Does NOT use ADB** â€” calling ``adb.exe`` restarts the ADB
+        daemon, which drops the emulator's virtual network bridge and
+        kills PPPoker's internet connection.
+
+        Instead, uses mss to capture the emulator render HWND at
+        720Ã—1280 and encodes to PNG in-memory.
         """
-        adb = self._adb_exe or os.getenv(
-            "TITAN_ADB_PATH", r"F:\LDPlayer\LDPlayer9\adb.exe"
-        )
-        device = self._adb_device or os.getenv(
-            "TITAN_ADB_DEVICE", "127.0.0.1:5555"
-        )
-
         try:
-            result = subprocess.run(
-                [adb, "-s", device, "exec-out", "screencap", "-p"],
-                timeout=10,
-                capture_output=True,
-            )
-            if result.returncode == 0 and len(result.stdout) > 100:
-                return result.stdout
-        except Exception as exc:
-            self._log.error(f"Screenshot failed: {exc}")
+            import mss
+            import io
+            from PIL import Image  # type: ignore[import-untyped]
 
-        return None
+            hwnd = self._render_hwnd or _find_emulator_render_hwnd(self._emu_profile)
+            if hwnd is None:
+                self._log.warning("take_screenshot: emulator HWND not found")
+                return None
+
+            # Get window client rect
+            rect = wintypes.RECT()
+            ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect))
+            pt = wintypes.POINT(0, 0)
+            ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+
+            monitor = {
+                "left": pt.x,
+                "top": pt.y,
+                "width": rect.right,
+                "height": rect.bottom,
+            }
+
+            with mss.mss() as sct:
+                frame = sct.grab(monitor)
+                img = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
+                img = img.resize((self._android_w, self._android_h), Image.LANCZOS)
+
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception as exc:
+            self._log.error(f"Screenshot via mss failed: {exc}")
+            return None
 
     def idle_jitter(self) -> None:
         """Perform a tiny random mouse movement to simulate a resting hand.
@@ -1533,8 +1596,8 @@ class GhostMouse:
         """
         if not self._enabled:
             return
-        if self._input_backend in ("adb", "ldplayer"):
-            return  # ADB/LDPlayer don't move a cursor — jitter is not applicable
+        if self._input_backend in ("adb", "emulator"):
+            return  # ADB/emulator don't move a cursor â€” jitter is not applicable
         if not self.config.idle_jitter_enabled:
             return
 

@@ -37,9 +37,11 @@ Button regions (configurable via env / calibration):
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from agent.ghost_mouse import GhostMouse
+if TYPE_CHECKING:
+    from agent.ghost_mouse import GhostMouse
+
 from tools.mouse_protocol import (
     ClickPoint,
     GhostMouseConfig,
@@ -86,6 +88,7 @@ class ActionTool:
 
     def __init__(self) -> None:
         self._log = TitanLogger("Action")
+        from agent.ghost_mouse import GhostMouse  # lazy import to avoid circular
         self._ghost = GhostMouse(GhostMouseConfig())
         self._regions = dict(_DEFAULT_ACTION_REGIONS)
         self._adb_scale = 1.0
@@ -376,10 +379,10 @@ class ActionTool:
     def _load_input_backend_config(self) -> None:
         """Load input backend settings from config YAML.
 
-        Supports ``ldplayer`` (real mouse on Win32 render surface),
+        Supports ``emulator`` / ``mumu`` (real mouse on Win32 render surface),
         ``adb`` (shell input tap), or ``pyautogui`` (legacy).
 
-        For the ``ldplayer`` backend, coordinates in ``action_coordinates``
+        For the ``emulator`` backend, coordinates in ``action_coordinates``
         should already be in Android override resolution (1080×1920).
         No scaling is applied.
 
@@ -403,7 +406,7 @@ class ActionTool:
         if adb_device:
             os.environ.setdefault("TITAN_ADB_DEVICE", str(adb_device))
 
-        # LDPlayer settings
+        # Emulator render-surface settings
         android_w = cfg.get_raw("input.android_w", "")
         if android_w:
             os.environ.setdefault("TITAN_ANDROID_W", str(android_w))
@@ -426,5 +429,6 @@ class ActionTool:
                 )
 
         # Re-create GhostMouse so it picks up the new env vars
-        if str(backend).lower() in ("adb", "ldplayer"):
+        if str(backend).lower() in ("adb", "emulator", "mumu", "ldplayer"):
+            from agent.ghost_mouse import GhostMouse  # lazy import
             self._ghost = GhostMouse(GhostMouseConfig())

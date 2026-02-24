@@ -219,11 +219,17 @@ class HiveBrain:
             "action": action,
         }
 
-    def start(self) -> None:
+    def start(self, ready_event: Any = None) -> None:
+        """Start the ZMQ REP server loop.
+
+        Args:
+            ready_event: Optional ``threading.Event`` — set after the socket
+                         binds successfully so the caller knows we're live.
+        """
         if zmq is None:
             raise RuntimeError("pyzmq não disponível. Instale dependências com requirements.txt")
 
-        context = zmq.Context.instance()
+        context = zmq.Context()  # fresh context (not singleton — avoids stale state after crash)
 
         def _create_socket() -> Any:
             sock = context.socket(zmq.REP)
@@ -237,6 +243,11 @@ class HiveBrain:
         _log.highlight(f"Listening on {self.bind_address}")
         backend = "redis" if self._redis_client is not None else "memory"
         _log.info(f"Squad backend={backend}  ttl={self.ttl_seconds}s")
+
+        # Signal that the bind succeeded — callers waiting on ready_event
+        # can now trust that the server is accepting connections.
+        if ready_event is not None:
+            ready_event.set()
 
         max_reconnects = 10
         reconnect_count = 0

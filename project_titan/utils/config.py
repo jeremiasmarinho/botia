@@ -138,9 +138,9 @@ class OCRRuntimeConfig:
     def regions(self) -> dict[str, tuple[int, int, int, int]]:
         """Return effective OCR regions keyed by metric name."""
         default_regions = {
-            "pot": (200, 430, 320, 45),
-            "hero_stack": (250, 1105, 250, 35),
-            "call_amount": (280, 1135, 200, 30),
+            "pot": (240, 385, 260, 55),
+            "hero_stack": (270, 1080, 155, 60),
+            "call_amount": (470, 1210, 155, 35),
         }
         resolved_regions = dict(default_regions)
 

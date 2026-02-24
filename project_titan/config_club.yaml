@@ -9,7 +9,7 @@ poker:
   simulations: 5000
   dynamic_simulations: true
 
-# ── Emulador: configuração fixa do LDPlayer ───────────────────────────────
+# ── Emulador: configuração fixa do MuMu Player 12 ─────────────────────────────
 # NUNCA alterar — todo o projeto está calibrado para 720x1280 DPI 320.
 emulator:
   resolution_w: 720
@@ -21,14 +21,14 @@ emulator:
   wm_size_override: false
 
 vision:
-  model_path: models/titan_v7_hybrid.pt
-  confidence_threshold: 0.35
-  emulator_title: LDPlayer
+  model_path: models/titan_v8_pro.pt
+  confidence_threshold: 0.30
+  emulator_title: MuMu
   target_fps: 30
-  chrome_top: 35
+  chrome_top: 0
   chrome_bottom: 0
   chrome_left: 0
-  chrome_right: 38
+  chrome_right: 0
   collect_data: false
   collect_data_dir: data/raw
   fail_fast: false
@@ -42,7 +42,7 @@ vision:
       x: 130
       y: 840
       w: 460
-      h: 170
+      h: 260
     board_area:
       x: 116
       y: 480
@@ -65,10 +65,13 @@ ocr:
   use_easyocr: false
   tesseract_cmd: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
   # OCR regions em coordenadas Android nativas (720x1280).
-  # Ajustadas para PPPoker PLO6 portrait — info bar acima dos botões.
-  pot_region: 200,430,320,45
-  stack_region: 250,1105,250,35
-  call_region: 280,1135,200,30
+  # Re-calibradas em 2025-07-17 via diag_broad_scan.py no MuMu 12.
+  #   pot    → valor do pot acima do board (y≈385-440).
+  #   stack  → stack do herói abaixo das cartas (y≈1080-1140, x≈280-425).
+  #   call   → valor no botão de call/raise (y≈1210-1245, x≈475-630).
+  pot_region: 240,385,260,55
+  stack_region: 270,1080,155,60
+  call_region: 470,1210,155,35
   pot_min: 0.0
   pot_max: 500000.0
   stack_min: 0.0
@@ -130,14 +133,14 @@ logging:
   no_color: false
   disable_file_log: false
 
-# ── Input backend: LDPlayer (ADB touchscreen events) ────────────────────
+# ── Input backend: MuMu Player 12 (Win32 + ADB fallback) ──────────────
 # PPPoker Unity accepts ADB `input touchscreen tap` at native 720x1280
 # resolution.  The `wm size` override MUST NOT be active — it breaks
 # both physical clicks and reverses which ADB source Unity accepts.
 # Coordinates in action_coordinates are in Android native resolution
-# (720x1280 for LDPlayer default config).
+# (720x1280 for MuMu Player 12 default config).
 input:
-  backend: ldplayer
+  backend: mumu
   # Android native resolution of the emulator
   android_w: 720
   android_h: 1280

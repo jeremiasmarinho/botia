@@ -65,6 +65,17 @@ def _ensure_deps() -> bool:
     try:
         import pytesseract as tess  # type: ignore[import-untyped]
         cmd = os.getenv("TITAN_TESSERACT_CMD", "").strip()
+        if not cmd:
+            # Auto-detect common Tesseract install paths on Windows
+            _candidates = [
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+            ]
+            for _cand in _candidates:
+                if os.path.isfile(_cand):
+                    cmd = _cand
+                    break
         if cmd:
             tess.pytesseract.tesseract_cmd = cmd
         _pytesseract = tess
@@ -132,26 +143,29 @@ class PPPokerCardReader:
     #   hero cards ≈ button_y − 420  to  button_y − 260
     #   hero cards width ≈ 460px centred on midpoint of fold↔raise
     _HERO_Y_OFFSET_TOP: int = -420      # above button_y
-    _HERO_Y_OFFSET_BOTTOM: int = -260   # above button_y
-    _HERO_X_HALF_WIDTH: int = 230       # ± from table centre
+    _HERO_Y_OFFSET_BOTTOM: int = -150   # above button_y (PLO5 hero cards may be lower)
+    _HERO_X_HALF_WIDTH: int = 310       # ± from table centre (PLO5 hero cards fan wider)
 
     # -- Board card region geometry (relative to pot / estimated position) --
     # Board cards sit just below the pot indicator in PPPoker.
-    _BOARD_Y_OFFSET_TOP: int = 20       # below pot_y
-    _BOARD_Y_OFFSET_BOTTOM: int = 130   # below pot_y
-    _BOARD_X_HALF_WIDTH: int = 230      # ± from pot centre
+    # Widened to avoid clipping card rank labels at the edges.
+    _BOARD_Y_OFFSET_TOP: int = -40      # above pot_y (generous margin)
+    _BOARD_Y_OFFSET_BOTTOM: int = 200   # below pot_y
+    _BOARD_X_HALF_WIDTH: int = 260      # ± from pot centre
     # Fallback: if pot is not detected, estimate board position relative
     # to buttons.  Board is approximately 700-800 px above the buttons.
-    _BOARD_FALLBACK_Y_OFFSET: int = -750  # above button_y
+    _BOARD_FALLBACK_Y_OFFSET: int = -760  # above button_y
 
     # -- Card segmentation thresholds --------------------------------------
-    _BRIGHT_THRESHOLD: int = 200        # grayscale value to consider "bright"
-    _MIN_CARD_WIDTH: int = 20           # minimum contour width for a card
-    _MAX_CARD_WIDTH: int = 100          # maximum contour width
-    _MIN_CARD_HEIGHT: int = 30          # minimum contour height
-    _MAX_CARD_HEIGHT: int = 120         # maximum contour height
-    _MIN_CARD_ASPECT: float = 0.4       # min width/height ratio
-    _MAX_CARD_ASPECT: float = 1.0       # max width/height ratio
+    # PPPoker cards have gold/cream backgrounds; a threshold of 200 is
+    # too aggressive and misses most card contours.  Lowered to 140.
+    _BRIGHT_THRESHOLD: int = 140        # grayscale value to consider "bright"
+    _MIN_CARD_WIDTH: int = 30           # minimum contour width for a card
+    _MAX_CARD_WIDTH: int = 120          # maximum contour width
+    _MIN_CARD_HEIGHT: int = 45          # minimum contour height
+    _MAX_CARD_HEIGHT: int = 150         # maximum contour height
+    _MIN_CARD_ASPECT: float = 0.3       # min width/height ratio
+    _MAX_CARD_ASPECT: float = 1.2       # max width/height ratio (allow near-square cards too)
 
     def __init__(self) -> None:
         self._debug = os.getenv("TITAN_CARD_READER_DEBUG", "0").strip() == "1"
@@ -342,6 +356,11 @@ class PPPokerCardReader:
 
         Uses brightness thresholding to find white rectangular card faces,
         then reads rank via OCR and suit via colour analysis.
+
+        Robust to emulators where cards are dim (MuMu Vulkan) or occupy
+        only a small vertical slice of the region — auto-crops to the
+        bright area before contour detection, retries with progressively
+        lower thresholds, and splits wide merged contours.
         """
         cv2 = _cv2
         np = _np
@@ -352,38 +371,89 @@ class PPPokerCardReader:
         if h_r < 20 or w_r < 20:
             return []
 
-        # Convert to grayscale and threshold for bright regions (card faces)
         gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-        _, bright_mask = cv2.threshold(
-            gray, self._BRIGHT_THRESHOLD, 255, cv2.THRESH_BINARY
-        )
 
-        # Morphological closing to fill small gaps in card faces
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        bright_mask = cv2.morphologyEx(bright_mask, cv2.MORPH_CLOSE, kernel)
+        # ── Auto-crop to bright Y band ──────────────────────────────
+        # When cards occupy only a small vertical slice (e.g. bottom 60px
+        # of a 270px hero crop), column brightness ratios get diluted and
+        # the fallback splitter fails.  Detect the Y range where most
+        # bright pixels live and crop to it (with 10px margin).
+        #
+        # Use threshold=160 for AUTO-CROP: this is ONLY to identify the
+        # vertical band where card faces sit.  A high threshold avoids
+        # including dim felt/background rows.  The actual card detection
+        # (contour + column-split) uses lower thresholds below.
+        working_region = region
+        working_gray = gray
+        crop_y_offset = 0
+        _, bright_full = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
+        row_brightness = np.mean(bright_full > 0, axis=1)  # fraction per row
+        bright_rows = np.where(row_brightness > 0.05)[0]
+        if len(bright_rows) > 0:
+            y_top = max(0, int(bright_rows[0]) - 10)
+            y_bot = min(h_r, int(bright_rows[-1]) + 10)
+            if (y_bot - y_top) < h_r * 0.85:  # only crop if it saves >15%
+                working_region = region[y_top:y_bot, :]
+                working_gray = gray[y_top:y_bot, :]
+                crop_y_offset = y_top
 
-        # Find contours of bright regions
-        contours, _ = cv2.findContours(
-            bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+        h_w, w_w = working_region.shape[:2]
+        if h_w < 10 or w_w < 10:
+            return []
 
-        # Filter contours by size and aspect ratio to find card-shaped regions
-        card_bboxes: list[tuple[int, int, int, int]] = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w < self._MIN_CARD_WIDTH or w > self._MAX_CARD_WIDTH:
-                continue
-            if h < self._MIN_CARD_HEIGHT or h > self._MAX_CARD_HEIGHT:
-                continue
-            aspect = w / max(h, 1)
-            if aspect < self._MIN_CARD_ASPECT or aspect > self._MAX_CARD_ASPECT:
-                continue
-            card_bboxes.append((x, y, w, h))
+        # ── Multi-threshold card detection ──────────────────────────
+        # Try progressively lower thresholds and keep the result that
+        # finds the MOST individual cards.  MuMu Vulkan renders cards
+        # dimmer on the left side (brightness ~120-160), so higher
+        # thresholds only catch the right-side cards.  By trying all
+        # thresholds and picking the best, we catch all 5 PLO5 cards.
+        best_bboxes: list[tuple[int, int, int, int]] = []
+        thresholds = [self._BRIGHT_THRESHOLD, 120, 100]
+        for thresh in thresholds:
+            candidate_bboxes: list[tuple[int, int, int, int]] = []
+            _, bright_mask = cv2.threshold(
+                working_gray, thresh, 255, cv2.THRESH_BINARY
+            )
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            bright_mask = cv2.morphologyEx(bright_mask, cv2.MORPH_CLOSE, kernel)
 
-        if not card_bboxes:
-            # Fallback: if no individual cards found via contours,
-            # try splitting the bright region into equal segments.
-            card_bboxes = self._split_by_brightness_columns(bright_mask, h_r)
+            contours, _ = cv2.findContours(
+                bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Accept wider contours — they may be merged cards
+                if w < self._MIN_CARD_WIDTH:
+                    continue
+                if h < self._MIN_CARD_HEIGHT or h > self._MAX_CARD_HEIGHT:
+                    continue
+                aspect = w / max(h, 1)
+                if aspect < self._MIN_CARD_ASPECT:
+                    continue
+
+                # If contour is wider than a single card, split it
+                if w > self._MAX_CARD_WIDTH * 1.3:
+                    n_cards = max(2, round(w / 55))  # ~55px per card
+                    card_w = w // n_cards
+                    for i in range(n_cards):
+                        cx = x + i * card_w
+                        cw = card_w if i < n_cards - 1 else (x + w - cx)
+                        candidate_bboxes.append((cx, y, cw, h))
+                elif aspect <= self._MAX_CARD_ASPECT:
+                    candidate_bboxes.append((x, y, w, h))
+
+            if not candidate_bboxes:
+                # Fallback: split by brightness columns
+                candidate_bboxes = self._split_by_brightness_columns(
+                    bright_mask, h_w
+                )
+
+            # Keep the threshold result that yields the most card candidates
+            if len(candidate_bboxes) > len(best_bboxes):
+                best_bboxes = candidate_bboxes
+
+        card_bboxes = best_bboxes
 
         if not card_bboxes:
             return []
@@ -394,18 +464,34 @@ class PPPokerCardReader:
         # Merge overlapping bboxes (cards that got split by contour noise)
         card_bboxes = self._merge_overlapping(card_bboxes)
 
-        # Read each card
+        # Re-split any merged bboxes that are too wide after merging
+        final_bboxes: list[tuple[int, int, int, int]] = []
+        for x, y, w, h in card_bboxes:
+            if w > self._MAX_CARD_WIDTH * 1.3:
+                n_cards = max(2, round(w / 55))
+                card_w = w // n_cards
+                for i in range(n_cards):
+                    cx = x + i * card_w
+                    cw = card_w if i < n_cards - 1 else (x + w - cx)
+                    final_bboxes.append((cx, y, cw, h))
+            else:
+                final_bboxes.append((x, y, w, h))
+        card_bboxes = final_bboxes
+
+        # Read each card — use working_region (auto-cropped)
         cards: list[str] = []
         seen_tokens: set[str] = set()
         for x, y, w, h in card_bboxes:
-            card_crop = region[y:y + h, x:x + w]
+            card_crop = working_region[y:y + h, x:x + w]
             token = self._read_single_card(card_crop)
             if token and token not in seen_tokens:
                 cards.append(token)
                 seen_tokens.add(token)
 
         if self._debug:
-            self._save_region_debug(region, card_bboxes, cards, zone)
+            # Adjust bboxes back to full-region coordinates for debug
+            debug_bboxes = [(x, y + crop_y_offset, w, h) for x, y, w, h in card_bboxes]
+            self._save_region_debug(region, debug_bboxes, cards, zone)
 
         return cards
 
@@ -428,8 +514,10 @@ class PPPokerCardReader:
         # Column brightness profile: fraction of bright pixels per column
         col_brightness = np.mean(bright_mask > 0, axis=0)  # shape: (w,)
 
-        # Threshold: column is "card" if ≥ 30% of its pixels are bright
-        is_card_col = col_brightness >= 0.30
+        # Threshold: column is "card" if ≥ 15% of its pixels are bright.
+        # Lowered from 30% because some emulators (MuMu Vulkan) render
+        # card faces dimmer and regions may be taller than the cards.
+        is_card_col = col_brightness >= 0.15
 
         # Find contiguous runs of card columns
         segments: list[tuple[int, int]] = []
@@ -449,10 +537,36 @@ class PPPokerCardReader:
             if seg_width >= self._MIN_CARD_WIDTH:
                 segments.append((seg_start, w))
 
-        # Convert segments to bboxes (full region height)
+        # Convert segments to bboxes with PER-SEGMENT vertical bounds.
+        # Instead of using full region_height, scan each column segment
+        # to find where brightness is actually concentrated vertically.
         bboxes: list[tuple[int, int, int, int]] = []
         for x_start, x_end in segments:
             seg_w = x_end - x_start
+
+            # Find vertical extent of brightness in this column segment
+            seg_mask = bright_mask[:, x_start:x_end]
+            row_bright = np.mean(seg_mask > 0, axis=1)
+            bright_rows_seg = np.where(row_bright > 0.10)[0]
+            if len(bright_rows_seg) > 0:
+                y_top_seg = max(0, int(bright_rows_seg[0]) - 5)
+                y_bot_seg = min(h, int(bright_rows_seg[-1]) + 5)
+            else:
+                y_top_seg = 0
+                y_bot_seg = h
+            seg_h = y_bot_seg - y_top_seg
+
+            # Clamp height to MAX_CARD_HEIGHT if needed
+            if seg_h > self._MAX_CARD_HEIGHT:
+                mid = (y_top_seg + y_bot_seg) // 2
+                y_top_seg = max(0, mid - self._MAX_CARD_HEIGHT // 2)
+                y_bot_seg = min(h, y_top_seg + self._MAX_CARD_HEIGHT)
+                seg_h = y_bot_seg - y_top_seg
+
+            # Skip if too short
+            if seg_h < self._MIN_CARD_HEIGHT:
+                continue
+
             # If segment is very wide, it might be multiple cards merged.
             # Try to split it into ~card-width pieces.
             if seg_w > self._MAX_CARD_WIDTH * 1.5:
@@ -461,9 +575,9 @@ class PPPokerCardReader:
                 for i in range(n_cards):
                     cx = x_start + i * card_w
                     cw = card_w if i < n_cards - 1 else (x_end - cx)
-                    bboxes.append((cx, 0, cw, region_height))
+                    bboxes.append((cx, y_top_seg, cw, seg_h))
             else:
-                bboxes.append((x_start, 0, seg_w, region_height))
+                bboxes.append((x_start, y_top_seg, seg_w, seg_h))
 
         return bboxes
 
@@ -499,6 +613,7 @@ class PPPokerCardReader:
 
         The rank is read via OCR from the upper portion of the card.
         The suit is determined by colour analysis of the rank/symbol area.
+        If the rank region fails, tries the full card crop as well.
         """
         cv2 = _cv2
         np = _np
@@ -514,11 +629,15 @@ class PPPokerCardReader:
         rank_h = max(10, int(h * 0.55))
         rank_region = card_crop[0:rank_h, :]
 
-        # Read rank via OCR
+        # Read rank via OCR — try rank region first, then full card
         rank = self._ocr_rank(rank_region)
+        if not rank:
+            rank = self._ocr_rank(card_crop)
 
-        # Detect suit via colour analysis
+        # Detect suit via colour analysis — try rank region, then full card
         suit = self._detect_suit_color(rank_region)
+        if not suit:
+            suit = self._detect_suit_color(card_crop)
 
         if rank and suit:
             token = f"{rank}{suit}"
@@ -551,12 +670,12 @@ class PPPokerCardReader:
 
         h, w = gray.shape[:2]
 
-        # Upscale for better OCR
-        scale = max(1, min(4, 80 // max(h, 1)))
-        if scale > 1:
-            gray = cv2.resize(
-                gray, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC
-            )
+        # Upscale for better OCR.  Always at least 2× for small card
+        # crops (MuMu Vulkan hero cards are often ~55px rank regions).
+        scale = max(2, min(5, 120 // max(h, 1)))
+        gray = cv2.resize(
+            gray, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC
+        )
 
         # Threshold
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -636,20 +755,38 @@ class PPPokerCardReader:
             ♠ spades   = black     (low S, low V — or very dark)
             ♦ diamonds = blue      (H ≈ 100-130, high S)
             ♣ clubs    = green     (H ≈ 35-85, high S)
+
+        Handles two major noise sources in card crops:
+        * **Gold/amber card borders** (PPPoker UI decoration): H ≈ 15-30,
+          S ≈ 80-255.  These dominate the crop and must be excluded.
+        * **Green table felt bleed** at crop edges: H ≈ 75-85, S > 130.
+
+        Also handles MuMu Vulkan rendering where colours may be slightly
+        less saturated than on DirectX-based emulators (LDPlayer).
         """
         cv2 = _cv2
         np = _np
         if cv2 is None or np is None:
             return None
 
-        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        h_reg, w_reg = region.shape[:2]
+
+        # ── Focus on the inner region to reduce edge bleed ─────────
+        # Crop 15% from each edge to reduce gold border and felt bleed.
+        margin_x = max(3, int(w_reg * 0.15))
+        margin_y = max(2, int(h_reg * 0.10))
+        inner = region[margin_y:h_reg - margin_y, margin_x:w_reg - margin_x]
+        if inner.shape[0] < 5 or inner.shape[1] < 5:
+            inner = region  # too small, use full region
+
+        hsv = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)
         h_ch = hsv[:, :, 0]   # Hue [0-180]
         s_ch = hsv[:, :, 1]   # Saturation [0-255]
         v_ch = hsv[:, :, 2]   # Value [0-255]
 
-        # Mask out white/very bright pixels (card background)
-        # and very dark pixels (should not happen on white card)
-        non_bg = (s_ch > 40) & (v_ch > 30) & (v_ch < 240)
+        # Mask out white/very bright pixels (card background).
+        # Lowered saturation threshold from 40 → 25 for MuMu Vulkan.
+        non_bg = (s_ch > 25) & (v_ch > 30) & (v_ch < 240)
 
         # Also consider pure black / very dark pixels separately (spades)
         dark_mask = (v_ch < 60) & (s_ch < 80)
@@ -657,27 +794,37 @@ class PPPokerCardReader:
         n_coloured = int(np.sum(non_bg))
         n_dark = int(np.sum(dark_mask))
 
-        # If very few coloured or dark pixels, we can't determine suit
-        min_pixels = max(10, int(region.shape[0] * region.shape[1] * 0.02))
+        min_pixels = max(8, int(inner.shape[0] * inner.shape[1] * 0.015))
 
-        # Count pixels for each colour range
         if n_coloured >= min_pixels:
             hue_vals = h_ch[non_bg]
             sat_vals = s_ch[non_bg]
 
-            # Red: H in [0, 10] or [160, 180] with high saturation
-            red_mask = ((hue_vals < 12) | (hue_vals > 158)) & (sat_vals > 60)
+            # ── Exclude noise pixels ───────────────────────────────
+            # Gold/amber PPPoker card borders: H ≈ 15-35, any saturation.
+            # These dominate the crop and confuse suit detection.
+            gold_mask = (hue_vals > 14) & (hue_vals < 36)
+
+            # Green TABLE FELT bleed from crop edges:
+            # PPPoker felt has H≈75-85, S≈160-180, V≈125-140.
+            felt_mask = (hue_vals > 70) & (hue_vals < 86) & (sat_vals > 130)
+
+            # Combined exclusion mask
+            noise_mask = gold_mask | felt_mask
+
+            # Red (hearts): H < 12 or H > 158, S > 40
+            red_mask = ((hue_vals < 12) | (hue_vals > 158)) & (sat_vals > 40) & ~noise_mask
             n_red = int(np.sum(red_mask))
 
-            # Blue: H in [95, 135]
-            blue_mask = (hue_vals > 95) & (hue_vals < 135) & (sat_vals > 50)
+            # Blue (diamonds): H in (90, 140), S > 35
+            blue_mask = (hue_vals > 90) & (hue_vals < 140) & (sat_vals > 35) & ~noise_mask
             n_blue = int(np.sum(blue_mask))
 
-            # Green: H in [35, 85]
-            green_mask = (hue_vals > 35) & (hue_vals < 85) & (sat_vals > 50)
+            # Green (clubs): H in (35, 70), S > 35
+            # Upper bound lowered from 85 → 70 to avoid overlap with felt.
+            green_mask = (hue_vals > 35) & (hue_vals < 70) & (sat_vals > 35) & ~noise_mask
             n_green = int(np.sum(green_mask))
 
-            # Pick the dominant colour
             counts = {"h": n_red, "d": n_blue, "c": n_green}
             best_suit = max(counts, key=lambda k: counts[k])
             best_count = counts[best_suit]
@@ -690,9 +837,10 @@ class PPPokerCardReader:
             return "s"
 
         # Last resort: check if most non-background pixels are dark-ish
-        # (for spades on a white card)
-        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-        dark_text = (gray < 100) & (gray > 5)
+        # (for spades on a white card).  Use a strict threshold (gray < 60)
+        # to avoid false positives from dim-but-coloured suit symbols.
+        gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+        dark_text = (gray < 60) & (gray > 5)
         n_dark_text = int(np.sum(dark_text))
         if n_dark_text >= min_pixels:
             return "s"

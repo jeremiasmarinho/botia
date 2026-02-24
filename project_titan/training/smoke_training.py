@@ -82,9 +82,9 @@ def _validate_data_yaml() -> None:
     if len(names) != nc:
         raise ValueError(f"nc={nc} mas names tem {len(names)} entradas")
 
-    # Validate all 52 cards + 4 actions + 2 regions = 58
-    if nc != 58:
-        raise ValueError(f"Esperado nc=58, encontrado nc={nc}")
+    # Validate all 52 cards + 8 actions + 2 regions = 62
+    if nc != 62:
+        raise ValueError(f"Esperado nc=62, encontrado nc={nc}")
 
     # Verify card names
     ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
@@ -113,11 +113,11 @@ def _validate_prepare_dataset_classes() -> None:
     finally:
         sys.path.pop(0)
 
-    if len(ALL_CLASS_NAMES) != 58:
-        raise ValueError(f"ALL_CLASS_NAMES tem {len(ALL_CLASS_NAMES)} classes, esperado 58")
+    if len(ALL_CLASS_NAMES) != 62:
+        raise ValueError(f"ALL_CLASS_NAMES tem {len(ALL_CLASS_NAMES)} classes, esperado 62")
 
-    if len(CLASS_NAME_TO_ID) != 58:
-        raise ValueError(f"CLASS_NAME_TO_ID tem {len(CLASS_NAME_TO_ID)} entradas, esperado 58")
+    if len(CLASS_NAME_TO_ID) != 62:
+        raise ValueError(f"CLASS_NAME_TO_ID tem {len(CLASS_NAME_TO_ID)} entradas, esperado 62")
 
     # Cross-check with data.yaml
     try:

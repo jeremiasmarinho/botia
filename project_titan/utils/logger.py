@@ -144,6 +144,9 @@ class TitanLogger:
         self._write_file_log("WARN", message)
         print(self._format(_FG_YELLOW, "!", message))
 
+    # alias for compatibility with stdlib logging convention
+    warning = warn
+
     def error(self, message: str) -> None:
         self._write_file_log("ERROR", message)
         print(self._format(_FG_RED, "X", message))

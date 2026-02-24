@@ -68,7 +68,7 @@ class VisionTool:
     # classify generic (un-prefixed) YOLO card detections as hero
     # or board cards.  Loaded from config_club.yaml ``vision.regions``.
     _DEFAULT_HERO_Y_MIN: int = 830   # hero cards Y range start (720x1280 portrait)
-    _DEFAULT_HERO_Y_MAX: int = 1010  # hero cards Y range end
+    _DEFAULT_HERO_Y_MAX: int = 1120  # hero cards Y range end (PLO5 may place cards lower)
     _DEFAULT_BOARD_Y_MIN: int = 450  # board cards Y range start
     _DEFAULT_BOARD_Y_MAX: int = 650  # board cards Y range end
 
@@ -448,21 +448,29 @@ class VisionTool:
 
     # ── Screen capture ──────────────────────────────────────────────
 
-    def _capture_frame(self) -> Any | None:
-        """Grab the current screen via ADB screencap (preferred) or ``mss`` fallback.
+    # Android-native resolution that the YOLO model was trained on.
+    _ANDROID_W: int = 720
+    _ANDROID_H: int = 1280
 
-        ADB screencap is immune to desktop window occlusion and always
-        returns the correct Android emulator content.
+    def _capture_frame(self) -> Any | None:
+        """Grab the current screen via mss (preferred) or ADB screencap fallback.
+
+        The primary capture uses Win32 ``mss`` on the emulator render
+        window — this is fast, reliable and **does not touch ADB**.
+
+        ADB screencap is only used as a last resort because calling
+        ``adb.exe`` restarts the ADB daemon, which can disrupt the
+        emulator's network connectivity.
 
         Returns:
-            A BGR numpy array or ``None`` on failure.
+            A BGR numpy array (720x1280) or ``None`` on failure.
         """
-        # Try ADB screencap first (immune to window occlusion)
-        frame = self._capture_frame_adb()
+        # Primary: capture emulator render window via mss (no ADB)
+        frame = self._capture_frame_emulator_window()
         if frame is not None:
             return frame
 
-        # Fallback to mss desktop capture
+        # Fallback: full-screen mss (legacy, usually wrong scale)
         try:
             import mss
             import numpy as np
@@ -473,7 +481,75 @@ class VisionTool:
             target = self.monitor if self.monitor is not None else sct.monitors[1]
             frame = np.array(sct.grab(target))
         # mss captures BGRA; strip alpha channel for YOLO (expects BGR).
-        return frame[:, :, :3]
+        if frame is not None and frame.shape[2] == 4:
+            return frame[:, :, :3]
+        return frame
+
+    def _capture_frame_emulator_window(self) -> Any | None:
+        """Capture the emulator render surface via Win32 + mss.
+
+        Uses the emulator profile system to find the correct render
+        window (e.g. ``nemuwin`` in MuMu, ``subWin`` in LDPlayer).
+        Grabs its client area with ``mss`` and resizes to 720x1280
+        (Android native) so all coordinates match the YOLO model.
+
+        Returns:
+            A BGR numpy array at 720x1280 or ``None``.
+        """
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+            import mss
+            import numpy as np
+            import cv2
+        except Exception:
+            return None
+
+        try:
+            from utils.emulator_profiles import get_profile, find_render_hwnd
+
+            profile = get_profile()
+            sub_hwnd = find_render_hwnd(profile)
+            if sub_hwnd is None or sub_hwnd == 0:
+                return None
+
+            user32 = ctypes.windll.user32
+
+            # Get screen position and client size
+            class _POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+            pt = _POINT(0, 0)
+            user32.ClientToScreen(sub_hwnd, ctypes.byref(pt))
+            rect = wt.RECT()
+            user32.GetClientRect(sub_hwnd, ctypes.byref(rect))
+            cw, ch = rect.right, rect.bottom
+            if cw <= 0 or ch <= 0:
+                return None
+
+            with mss.mss() as sct:
+                monitor = {
+                    "left": pt.x, "top": pt.y,
+                    "width": cw, "height": ch,
+                }
+                raw = np.array(sct.grab(monitor))
+
+            # BGRA → BGR
+            frame_bgr = raw[:, :, :3].copy()
+            # mss returns RGB order with some drivers; ensure BGR for cv2
+            # (mss actually returns BGRA, so [:3] gives BGR — correct).
+
+            # Resize to Android-native 720x1280
+            if frame_bgr.shape[1] != self._ANDROID_W or frame_bgr.shape[0] != self._ANDROID_H:
+                frame_bgr = cv2.resize(
+                    frame_bgr,
+                    (self._ANDROID_W, self._ANDROID_H),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+
+            return frame_bgr
+        except Exception:
+            return None
 
     def _capture_frame_adb(self) -> Any | None:
         """Capture the Android screen via ADB ``screencap -p``.
@@ -486,11 +562,13 @@ class VisionTool:
             import numpy as np
             import cv2
 
+            from utils.emulator_profiles import get_profile, find_adb_exe
+            _prof = get_profile()
             adb_path = os.getenv(
                 "TITAN_ADB_PATH",
-                r"F:\LDPlayer\LDPlayer9\adb.exe",
+                find_adb_exe(_prof) or "adb.exe",
             )
-            device = os.getenv("TITAN_ADB_DEVICE", "emulator-5554")
+            device = os.getenv("TITAN_ADB_DEVICE", _prof.default_adb_device or "127.0.0.1:16384")
 
             result = subprocess.run(
                 [adb_path, "-s", device, "exec-out", "screencap", "-p"],
@@ -749,9 +827,16 @@ class VisionTool:
             self.last_timing = _t
             return self._mark_state_change(self._fallback_snapshot())
 
+        # Use a low confidence threshold so marginal card detections
+        # survive.  The YOLO model detects PPPoker card faces at 0.10-0.25
+        # confidence; the default (0.35) filters them all out.  Buttons
+        # are detected at 0.90+ and are unaffected by the lower threshold.
+        _conf = self._float_env("TITAN_VISION_CONF", default=0.08)
         _t0 = time.perf_counter()
         try:
-            results = self._model.predict(source=frame, verbose=False)
+            results = self._model.predict(
+                source=frame, verbose=False, conf=_conf,
+            )
         except Exception:
             _t["yolo_ms"] = (time.perf_counter() - _t0) * 1000
             self.last_timing = _t
@@ -772,7 +857,8 @@ class VisionTool:
         has_hero = bool(snapshot.hero_cards)
 
         _t0 = time.perf_counter()
-        if not has_hero and self._card_reader.enabled:
+        has_board = bool(snapshot.board_cards)
+        if (not has_hero or not has_board) and self._card_reader.enabled:
             # Build action_points with config-based button positions so
             # the card reader can estimate hero/board regions even when
             # YOLO did not detect buttons.
@@ -784,12 +870,13 @@ class VisionTool:
             hero_cards, board_cards = self._card_reader.read_cards(
                 frame, reader_action_points, pot_xy,
             )
-            if hero_cards:
-                # Merge: prefer card-reader hero cards; keep YOLO board
-                # cards if card reader found none.
-                merged_board = board_cards if board_cards else list(snapshot.board_cards)
+            # Merge: prefer card-reader results; keep YOLO detections
+            # as fallback for any zone the reader didn't fill.
+            merged_hero = hero_cards if hero_cards else list(snapshot.hero_cards)
+            merged_board = board_cards if board_cards else list(snapshot.board_cards)
+            if merged_hero != list(snapshot.hero_cards) or merged_board != list(snapshot.board_cards):
                 snapshot = TableSnapshot(
-                    hero_cards=hero_cards,
+                    hero_cards=merged_hero,
                     board_cards=merged_board,
                     pot=snapshot.pot,
                     stack=snapshot.stack,

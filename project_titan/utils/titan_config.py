@@ -9,7 +9,7 @@ Uso::
     from utils.titan_config import cfg
 
     print(cfg.get_float("poker.aggression_level"))  # 0.5
-    print(cfg.get_str("vision.emulator_title"))      # "LDPlayer"
+    print(cfg.get_str("vision.emulator_title"))      # "MuMu"
     print(cfg.get_bool("overlay.enabled"))            # False
 
 Variável de ambiente equivalente: ``TITAN_POKER_AGGRESSION_LEVEL``
