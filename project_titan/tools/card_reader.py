@@ -162,7 +162,7 @@ class PPPokerCardReader:
     _BRIGHT_THRESHOLD: int = 140        # grayscale value to consider "bright"
     _MIN_CARD_WIDTH: int = 30           # minimum contour width for a card
     _MAX_CARD_WIDTH: int = 120          # maximum contour width
-    _MIN_CARD_HEIGHT: int = 45          # minimum contour height
+    _MIN_CARD_HEIGHT: int = 30           # minimum contour height (lowered for MuMu auto-crop)
     _MAX_CARD_HEIGHT: int = 150         # maximum contour height
     _MIN_CARD_ASPECT: float = 0.3       # min width/height ratio
     _MAX_CARD_ASPECT: float = 1.2       # max width/height ratio (allow near-square cards too)
@@ -175,6 +175,13 @@ class PPPokerCardReader:
         ).strip()
         self._enabled = os.getenv(
             "TITAN_CARD_READER_ENABLED", "1"
+        ).strip() in {"1", "true", "yes", "on"}
+
+        # Auto-template learning: save OCR-identified card crops as
+        # MuMu-native templates for the TemplateCardReader.
+        self._auto_template_dir = os.path.join("assets", "cards_mumu")
+        self._auto_template_enabled = os.getenv(
+            "TITAN_AUTO_TEMPLATE_LEARNING", "1"
         ).strip() in {"1", "true", "yes", "on"}
 
         # Allow env-var overrides for region offsets
@@ -405,12 +412,17 @@ class PPPokerCardReader:
         # Try progressively lower thresholds and keep the result that
         # finds the MOST individual cards.  MuMu Vulkan renders cards
         # dimmer on the left side (brightness ~120-160), so higher
-        # thresholds only catch the right-side cards.  By trying all
-        # thresholds and picking the best, we catch all 5 PLO5 cards.
-        best_bboxes: list[tuple[int, int, int, int]] = []
-        thresholds = [self._BRIGHT_THRESHOLD, 120, 100]
+        # thresholds only catch the right-side cards.
+        #
+        # Strategy: COMBINE detections from multiple thresholds.
+        # Start from the highest threshold (cleanest), then add NEW cards
+        # from lower thresholds that don't overlap with already-found cards.
+        # This catches both bright and dim cards in a single pass.
+
+        thresholds = [self._BRIGHT_THRESHOLD, 120, 100, 80]
+        combined_bboxes: list[tuple[int, int, int, int]] = []
+
         for thresh in thresholds:
-            candidate_bboxes: list[tuple[int, int, int, int]] = []
             _, bright_mask = cv2.threshold(
                 working_gray, thresh, 255, cv2.THRESH_BINARY
             )
@@ -421,9 +433,9 @@ class PPPokerCardReader:
                 bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
 
+            new_bboxes: list[tuple[int, int, int, int]] = []
             for contour in contours:
                 x, y, w, h = cv2.boundingRect(contour)
-                # Accept wider contours — they may be merged cards
                 if w < self._MIN_CARD_WIDTH:
                     continue
                 if h < self._MIN_CARD_HEIGHT or h > self._MAX_CARD_HEIGHT:
@@ -439,21 +451,28 @@ class PPPokerCardReader:
                     for i in range(n_cards):
                         cx = x + i * card_w
                         cw = card_w if i < n_cards - 1 else (x + w - cx)
-                        candidate_bboxes.append((cx, y, cw, h))
+                        new_bboxes.append((cx, y, cw, h))
                 elif aspect <= self._MAX_CARD_ASPECT:
-                    candidate_bboxes.append((x, y, w, h))
+                    new_bboxes.append((x, y, w, h))
 
-            if not candidate_bboxes:
+            if not new_bboxes:
                 # Fallback: split by brightness columns
-                candidate_bboxes = self._split_by_brightness_columns(
+                new_bboxes = self._split_by_brightness_columns(
                     bright_mask, h_w
                 )
 
-            # Keep the threshold result that yields the most card candidates
-            if len(candidate_bboxes) > len(best_bboxes):
-                best_bboxes = candidate_bboxes
+            # Add only bboxes that don't overlap with already-found cards
+            for bbox in new_bboxes:
+                if not self._overlaps_existing(bbox, combined_bboxes):
+                    combined_bboxes.append(bbox)
 
-        card_bboxes = best_bboxes
+            # Zone-aware limits: hero max 7, board max 6 (gives OCR
+            # room to filter, final output capped at 5 below).
+            max_bboxes = 7 if zone == "hero" else 6
+            if len(combined_bboxes) >= max_bboxes:
+                break
+
+        card_bboxes = combined_bboxes
 
         if not card_bboxes:
             return []
@@ -487,6 +506,11 @@ class PPPokerCardReader:
             if token and token not in seen_tokens:
                 cards.append(token)
                 seen_tokens.add(token)
+
+        # Cap to max cards per zone (PLO5: 5 hero, 5 board)
+        max_cards = 5
+        if len(cards) > max_cards:
+            cards = cards[:max_cards]
 
         if self._debug:
             # Adjust bboxes back to full-region coordinates for debug
@@ -582,6 +606,20 @@ class PPPokerCardReader:
         return bboxes
 
     @staticmethod
+    def _overlaps_existing(
+        bbox: tuple[int, int, int, int],
+        existing: list[tuple[int, int, int, int]],
+        min_overlap_frac: float = 0.4,
+    ) -> bool:
+        """Check if *bbox* overlaps with any existing bbox by > threshold."""
+        bx, by, bw, bh = bbox
+        for ex, ey, ew, eh in existing:
+            overlap_x = max(0, min(bx + bw, ex + ew) - max(bx, ex))
+            if overlap_x > min(bw, ew) * min_overlap_frac:
+                return True
+        return False
+
+    @staticmethod
     def _merge_overlapping(
         bboxes: list[tuple[int, int, int, int]],
     ) -> list[tuple[int, int, int, int]]:
@@ -624,36 +662,73 @@ class PPPokerCardReader:
         if h < 10 or w < 10:
             return None
 
-        # Use the upper portion (rank + suit symbol area)
-        # PPPoker shows rank in the top ~40-50% of the card
-        rank_h = max(10, int(h * 0.55))
-        rank_region = card_crop[0:rank_h, :]
+        # ── Rank OCR: focus on JUST the rank text (top-left corner) ──
+        # PPPoker shows a single rank char in the top ~35% of the card,
+        # left ~50%.  Cropping tighter avoids reading the suit symbol
+        # into the OCR string.
+        rank_h = max(10, int(h * 0.38))
+        rank_w = max(8, int(w * 0.55))
+        rank_corner = card_crop[0:rank_h, 0:rank_w]
 
-        # Read rank via OCR — try rank region first, then full card
-        rank = self._ocr_rank(rank_region)
+        # Try rank corner first, then wider region, then full card
+        rank = self._ocr_rank(rank_corner)
+        if not rank:
+            rank_region = card_crop[0:max(10, int(h * 0.50)), :]
+            rank = self._ocr_rank(rank_region)
         if not rank:
             rank = self._ocr_rank(card_crop)
 
-        # Detect suit via colour analysis — try rank region, then full card
-        suit = self._detect_suit_color(rank_region)
+        # ── Suit colour: use the FULL card for better colour sample ──
+        # More pixels → more reliable hue histogram.
+        suit = self._detect_suit_color(card_crop)
         if not suit:
-            suit = self._detect_suit_color(card_crop)
+            suit = self._detect_suit_color(rank_corner)
 
         if rank and suit:
             token = f"{rank}{suit}"
+            # Auto-template learning: save this card crop as a MuMu template
+            self._save_auto_template(card_crop, token)
             return token
 
         return None
 
+    def _save_auto_template(self, card_crop: Any, token: str) -> None:
+        """Save card crop as a MuMu-native template for future matching.
+
+        Only saves if auto-template learning is enabled and this token
+        doesn't already have a saved template.  Templates are stored in
+        ``assets/cards_mumu/`` and can be loaded by TemplateCardReader.
+        """
+        if not self._auto_template_enabled:
+            return
+        cv2 = _cv2
+        np = _np
+        if cv2 is None or np is None:
+            return
+
+        try:
+            os.makedirs(self._auto_template_dir, exist_ok=True)
+            dest = os.path.join(self._auto_template_dir, f"{token}.png")
+            if os.path.exists(dest):
+                return  # already have this template
+            # Only save if the crop looks like a valid card face
+            # (bright enough with some content variation)
+            gray = cv2.cvtColor(card_crop, cv2.COLOR_BGR2GRAY)
+            mean_val = float(np.mean(gray))
+            if mean_val < 100 or mean_val > 250:
+                return  # too dark or too white — probably not a card
+            cv2.imwrite(dest, card_crop)
+        except Exception:
+            pass
+
     def _ocr_rank(self, rank_region: Any) -> str | None:
         """OCR the rank character from the card's top region.
 
-        Pipeline:
-        1. Convert to grayscale
-        2. Upscale 3× for better OCR accuracy
-        3. Binary threshold (OTSU)
-        4. Invert if needed (dark text on white background)
-        5. Tesseract with single-char mode (PSM 10) and rank whitelist
+        Multi-strategy pipeline for robustness across emulators:
+        1. Upscale 5× for tiny MuMu/PPPoker card crops
+        2. Try multiple thresholding approaches (OTSU, CLAHE, fixed)
+        3. For each, try both polarities (normal + inverted)
+        4. Take the first valid rank from Tesseract
         """
         cv2 = _cv2
         np = _np
@@ -669,52 +744,87 @@ class PPPokerCardReader:
                 return None
 
         h, w = gray.shape[:2]
+        if h < 3 or w < 3:
+            return None
 
-        # Upscale for better OCR.  Always at least 2× for small card
-        # crops (MuMu Vulkan hero cards are often ~55px rank regions).
-        scale = max(2, min(5, 120 // max(h, 1)))
+        # Upscale aggressively for tiny rank crops.
+        scale = max(3, min(8, 150 // max(h, 1)))
         gray = cv2.resize(
             gray, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC
         )
 
-        # Threshold
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Generate multiple binary candidates
+        candidates: list[Any] = []
 
-        # Ensure dark text on white background (PPPoker has coloured text on
-        # white card — after thresholding the text could be either polarity).
-        white_frac = float(np.mean(binary > 127))
-        if white_frac < 0.5:
-            binary = cv2.bitwise_not(binary)
+        # Strategy 1: OTSU
+        _, bin_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        candidates.append(bin_otsu)
 
-        # Try Tesseract first
+        # Strategy 2: CLAHE + OTSU
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+        enhanced = clahe.apply(gray)
+        _, bin_clahe = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        candidates.append(bin_clahe)
+
+        # Strategy 3: Fixed threshold (good for white card background)
+        _, bin_fixed = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        candidates.append(bin_fixed)
+
+        # Strategy 4: Adaptive threshold
+        bin_adapt = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 15, 5,
+        )
+        candidates.append(bin_adapt)
+
+        # Try each candidate with both polarities
         if _pytesseract is not None:
-            rank = self._tesseract_rank(binary)
-            if rank:
-                return rank
+            for binary in candidates:
+                # Ensure dark text on white background
+                white_frac = float(np.mean(binary > 127))
+                if white_frac < 0.5:
+                    binary = cv2.bitwise_not(binary)
 
-        # Fallback: try with inverted image
-        if _pytesseract is not None:
-            inverted = cv2.bitwise_not(binary)
-            rank = self._tesseract_rank(inverted)
-            if rank:
-                return rank
+                rank = self._tesseract_rank(binary)
+                if rank:
+                    return rank
+
+                # Try inverted
+                rank = self._tesseract_rank(cv2.bitwise_not(binary))
+                if rank:
+                    return rank
 
         return None
 
     def _tesseract_rank(self, binary_image: Any) -> str | None:
-        """Run Tesseract on a clean binary image to read the rank."""
+        """Run Tesseract on a clean binary image to read the rank.
+
+        Includes a timeout guard to prevent Tesseract from hanging on
+        pathological inputs (very small or low-contrast images).
+        """
         if _pytesseract is None:
             return None
 
+        np = _np
+        if np is not None:
+            # Size guard: skip tiny images that cause Tesseract to hang
+            h, w = binary_image.shape[:2]
+            if h < 15 or w < 10:
+                return None
+            # Skip images with no text content (all white or all black)
+            white_frac = float(np.mean(binary_image > 127))
+            if white_frac > 0.98 or white_frac < 0.02:
+                return None
+
         try:
             # PSM 10 = single character, PSM 7 = single text line
-            for psm in (10, 7, 8):
+            for psm in (10, 7):
                 config = (
                     f"--psm {psm} "
                     "-c tessedit_char_whitelist=AaKkQqJjTt0123456789"
                 )
                 text = _pytesseract.image_to_string(
-                    binary_image, config=config
+                    binary_image, config=config, timeout=3,
                 ).strip()
                 text = re.sub(r"[^AaKkQqJjTt0-9]", "", text)
                 if not text:
@@ -747,22 +857,55 @@ class PPPokerCardReader:
 
         return None
 
+    # ── PPPoker suit reference colours (BGR) ─────────────────────
+    # Measured from actual MuMu 12 renders of PPPoker suit symbols.
+    # Each tuple: (B, G, R) as float32 for distance calculation.
+    _SUIT_REF_COLORS: dict[str, list[tuple[float, float, float]]] = {
+        # Hearts – red.  Measured from MuMu 12 PPPoker crops:
+        #   Dim:    BGR ≈ (43,46,77),  (45,49,79),  (92,63,67)
+        #   Bright: BGR ≈ (84,110,184), (82,81,229), (115,115,255)
+        "h": [
+            (43.0, 46.0, 77.0),    # dim hearts (suit symbol area)
+            (45.0, 49.0, 79.0),    # dim hearts variant
+            (92.0, 63.0, 67.0),    # reddish hearts
+            (84.0, 110.0, 184.0),  # bright hearts (card face)
+            (82.0, 81.0, 229.0),   # very bright red
+            (115.0, 115.0, 255.0), # pure bright red
+        ],
+        # Clubs – green.  Measured from MuMu 12 PPPoker crops:
+        #   H≈52: BGR ≈ (48,150,73), (62,157,86), (54,154,79)
+        #   H≈77: BGR ≈ (63,145,38), (77,119,18), (81,120,25)
+        "c": [
+            (48.0, 150.0, 73.0),   # standard MuMu green
+            (62.0, 157.0, 86.0),   # lighter green
+            (54.0, 154.0, 79.0),   # mid green
+            (63.0, 145.0, 38.0),   # dark green (H≈77)
+            (77.0, 119.0, 18.0),   # olive green (H≈78)
+            (81.0, 120.0, 25.0),   # teal green
+        ],
+        # Diamonds – blue.  Measured from MuMu 12 PPPoker crops:
+        #   BGR ≈ (237,103,36), very consistent across all crops
+        "d": [
+            (237.0, 103.0, 36.0),  # standard MuMu blue (measured)
+            (237.0, 104.0, 38.0),  # slight variant
+            (220.0, 100.0, 40.0),  # dimmer blue
+            (200.0, 90.0, 30.0),   # dark blue
+        ],
+    }
+
     def _detect_suit_color(self, region: Any) -> str | None:
-        """Detect card suit by dominant non-white colour in the region.
+        """Detect card suit using BGR Euclidean distance to reference colours.
 
-        PPPoker suit colours (in BGR / HSV):
-            ♥ hearts   = red       (H ≈ 0-10 or 160-180, high S)
-            ♠ spades   = black     (low S, low V — or very dark)
-            ♦ diamonds = blue      (H ≈ 100-130, high S)
-            ♣ clubs    = green     (H ≈ 35-85, high S)
+        This replaces the old HSV-hue-range approach which was too noisy
+        due to green table felt bleed and gold border interference.
 
-        Handles two major noise sources in card crops:
-        * **Gold/amber card borders** (PPPoker UI decoration): H ≈ 15-30,
-          S ≈ 80-255.  These dominate the crop and must be excluded.
-        * **Green table felt bleed** at crop edges: H ≈ 75-85, S > 130.
-
-        Also handles MuMu Vulkan rendering where colours may be slightly
-        less saturated than on DirectX-based emulators (LDPlayer).
+        Strategy:
+        1. Focus on the **suit symbol area** (upper-left, below rank text)
+           to avoid felt bleed and decorative borders.
+        2. Filter out white/near-white (card background) and gold border pixels.
+        3. For each remaining pixel find the closest suit reference colour.
+        4. If mostly dark pixels → spades.
+        5. Otherwise → suit with most votes wins.
         """
         cv2 = _cv2
         np = _np
@@ -771,78 +914,131 @@ class PPPokerCardReader:
 
         h_reg, w_reg = region.shape[:2]
 
-        # ── Focus on the inner region to reduce edge bleed ─────────
-        # Crop 15% from each edge to reduce gold border and felt bleed.
-        margin_x = max(3, int(w_reg * 0.15))
-        margin_y = max(2, int(h_reg * 0.10))
+        # ── Focus on the suit symbol area ──────────────────────────
+        # In a PPPoker card crop, the layout is:
+        #   Top 30-35%: rank text
+        #   35-60%: suit symbol (small coloured icon)
+        #   Below: card art / background
+        # We focus on y=[30%..60%] x=[5%..55%] to hit the suit symbol.
+        y_start = max(1, int(h_reg * 0.30))
+        y_end = min(h_reg - 1, int(h_reg * 0.60))
+        x_start = max(1, int(w_reg * 0.05))
+        x_end = min(w_reg - 1, int(w_reg * 0.55))
+
+        suit_roi = region[y_start:y_end, x_start:x_end]
+        if suit_roi.shape[0] < 3 or suit_roi.shape[1] < 3:
+            suit_roi = region  # fallback to full region if too small
+
+        # Also prepare inner region (cropped margins) as fallback
+        margin_x = max(2, int(w_reg * 0.12))
+        margin_y = max(2, int(h_reg * 0.08))
         inner = region[margin_y:h_reg - margin_y, margin_x:w_reg - margin_x]
         if inner.shape[0] < 5 or inner.shape[1] < 5:
-            inner = region  # too small, use full region
+            inner = region
 
-        hsv = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)
-        h_ch = hsv[:, :, 0]   # Hue [0-180]
-        s_ch = hsv[:, :, 1]   # Saturation [0-255]
-        v_ch = hsv[:, :, 2]   # Value [0-255]
+        # Try suit ROI first, then inner as fallback
+        for roi in [suit_roi, inner]:
+            result = self._classify_suit_bgr(roi)
+            if result is not None:
+                return result
 
-        # Mask out white/very bright pixels (card background).
-        # Lowered saturation threshold from 40 → 25 for MuMu Vulkan.
-        non_bg = (s_ch > 25) & (v_ch > 30) & (v_ch < 240)
+        return None
 
-        # Also consider pure black / very dark pixels separately (spades)
-        dark_mask = (v_ch < 60) & (s_ch < 80)
+    def _classify_suit_bgr(self, roi: Any) -> str | None:
+        """Classify suit from a BGR ROI using colour distance."""
+        cv2 = _cv2
+        np = _np
+        if cv2 is None or np is None:
+            return None
 
-        n_coloured = int(np.sum(non_bg))
-        n_dark = int(np.sum(dark_mask))
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        s_ch = hsv[:, :, 1]
+        v_ch = hsv[:, :, 2]
 
-        min_pixels = max(8, int(inner.shape[0] * inner.shape[1] * 0.015))
+        # ── Filter out background / noise pixels ──────────────────
+        # White card background: high V, low S
+        # Gold borders: H ≈ 15-35, S > 80 — exclude them
+        h_ch = hsv[:, :, 0]
+        gold_mask = (h_ch > 14) & (h_ch < 36) & (s_ch > 60)
+
+        # Coloured suit pixels: must have some saturation and not be
+        # pure white or pure black
+        # Note: no upper V limit — bright red hearts have V=255.
+        # White background already excluded by S > 30.
+        coloured = (s_ch > 30) & (v_ch > 50) & ~gold_mask
+
+        # Dark pixels (potential spades — black suit)
+        dark = (v_ch < 65) & (s_ch < 80)
+
+        n_coloured = int(np.sum(coloured))
+        n_dark = int(np.sum(dark))
+        total_px = roi.shape[0] * roi.shape[1]
+        min_pixels = max(5, int(total_px * 0.01))
 
         if n_coloured >= min_pixels:
-            hue_vals = h_ch[non_bg]
-            sat_vals = s_ch[non_bg]
+            # Get BGR values of coloured pixels
+            bgr_pixels = roi[coloured].astype(np.float32)  # shape (N, 3)
 
-            # ── Exclude noise pixels ───────────────────────────────
-            # Gold/amber PPPoker card borders: H ≈ 15-35, any saturation.
-            # These dominate the crop and confuse suit detection.
-            gold_mask = (hue_vals > 14) & (hue_vals < 36)
+            # ── Nearest-neighbour voting ───────────────────────────
+            # For each pixel, find the suit whose reference colour is
+            # closest, then vote for that suit.  This avoids the per-suit
+            # distance-threshold approach which suffered from overlapping
+            # regions in colour space.
+            suits = list(self._SUIT_REF_COLORS.keys())  # ["h", "c", "d"]
+            all_refs: list[tuple[float, float, float]] = []
+            suit_labels: list[str] = []
+            for suit in suits:
+                for ref in self._SUIT_REF_COLORS[suit]:
+                    all_refs.append(ref)
+                    suit_labels.append(suit)
 
-            # Green TABLE FELT bleed from crop edges:
-            # PPPoker felt has H≈75-85, S≈160-180, V≈125-140.
-            felt_mask = (hue_vals > 70) & (hue_vals < 86) & (sat_vals > 130)
+            ref_arr = np.array(all_refs, dtype=np.float32)  # shape (R_total, 3)
+            # bgr_pixels: (N, 1, 3), ref_arr: (1, R, 3) → dists: (N, R)
+            diffs = bgr_pixels[:, None, :] - ref_arr[None, :, :]
+            dists = np.sqrt(np.sum(diffs ** 2, axis=2))  # (N, R_total)
 
-            # Combined exclusion mask
-            noise_mask = gold_mask | felt_mask
+            # For each pixel, find the closest reference
+            closest_idx = np.argmin(dists, axis=1)  # (N,)
+            closest_dist = dists[np.arange(len(dists)), closest_idx]  # (N,)
 
-            # Red (hearts): H < 12 or H > 158, S > 40
-            red_mask = ((hue_vals < 12) | (hue_vals > 158)) & (sat_vals > 40) & ~noise_mask
-            n_red = int(np.sum(red_mask))
+            # Only count pixels whose closest match is within max distance
+            max_dist = 160.0
+            valid = closest_dist < max_dist
 
-            # Blue (diamonds): H in (90, 140), S > 35
-            blue_mask = (hue_vals > 90) & (hue_vals < 140) & (sat_vals > 35) & ~noise_mask
-            n_blue = int(np.sum(blue_mask))
+            votes: dict[str, int] = {"h": 0, "c": 0, "d": 0}
+            for i, label in enumerate(suit_labels):
+                mask = (closest_idx == i) & valid
+                votes[label] = votes.get(label, 0) + int(np.sum(mask))
 
-            # Green (clubs): H in (35, 70), S > 35
-            # Upper bound lowered from 85 → 70 to avoid overlap with felt.
-            green_mask = (hue_vals > 35) & (hue_vals < 70) & (sat_vals > 35) & ~noise_mask
-            n_green = int(np.sum(green_mask))
+            best_suit = max(votes, key=lambda k: votes[k])
+            best_count = votes[best_suit]
 
-            counts = {"h": n_red, "d": n_blue, "c": n_green}
-            best_suit = max(counts, key=lambda k: counts[k])
-            best_count = counts[best_suit]
-
+            # Ensure winner has meaningful pixel count
             if best_count >= min_pixels:
+                sorted_counts = sorted(votes.values(), reverse=True)
+                # Winner should lead the runner-up by at least 1.3×
+                if len(sorted_counts) < 2 or sorted_counts[1] == 0 or sorted_counts[0] >= sorted_counts[1] * 1.3:
+                    return best_suit
+
+            # Even if below min_pixels, if we have ANY votes and dark
+            # pixels don't clearly dominate, prefer the colour vote
+            # over defaulting to spades.
+            if best_count > 0 and n_dark < n_coloured * 2:
                 return best_suit
 
-        # If no coloured pixels dominate, check for black (spades)
+        # ── Check for spades (black suit) ──────────────────────────
         if n_dark >= min_pixels:
-            return "s"
+            # Spades only if dark pixels DOMINATE — significantly more
+            # dark pixels than coloured ones.  This prevents green cards
+            # with some dark text/borders from being classified as spades.
+            if n_dark >= n_coloured * 2:
+                return "s"
 
-        # Last resort: check if most non-background pixels are dark-ish
-        # (for spades on a white card).  Use a strict threshold (gray < 60)
-        # to avoid false positives from dim-but-coloured suit symbols.
-        gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
-        dark_text = (gray < 60) & (gray > 5)
+        # Spades fallback: gray-level check — only when very few coloured
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        dark_text = (gray < 65) & (gray > 5)
         n_dark_text = int(np.sum(dark_text))
-        if n_dark_text >= min_pixels:
+        if n_dark_text >= min_pixels * 2 and n_coloured < min_pixels:
             return "s"
 
         return None

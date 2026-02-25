@@ -702,6 +702,13 @@ class PokerAgent:
                 snapshot.call_amount = ocr_call
                 self.memory.set("call_amount", ocr_call)
 
+                # Re-push OCR values to HUD (initial push had pre-OCR zeros)
+                hud_state.push(
+                    pot=float(snapshot.pot),
+                    stack=float(snapshot.stack),
+                    call_amount=float(snapshot.call_amount),
+                )
+
             effective_action_points, action_calibration_source = (
                 self._apply_action_calibration(snapshot)
             )

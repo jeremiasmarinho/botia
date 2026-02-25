@@ -46,6 +46,7 @@ from tools.vision_label_parser import (
     parse_turn_label,
 )
 from tools.card_reader import PPPokerCardReader
+from tools.template_card_reader import TemplateCardReader
 
 
 class VisionTool:
@@ -97,6 +98,9 @@ class VisionTool:
         self._load_error: str | None = None
         self._last_state_signature: str = ""
         self._card_reader = PPPokerCardReader()
+
+        # Template-matching card reader (preferred over OCR-based reader)
+        self._template_reader = TemplateCardReader()
 
         # Granular timing breakdown (populated by _read_table_once)
         self.last_timing: dict[str, float] = {}
@@ -849,16 +853,15 @@ class VisionTool:
 
         snapshot = self._extract_snapshot(results[0])
 
-        # ── OCR card-reader fallback ───────────────────────────────
-        # The 52-class YOLO model only detects bare card tokens with no
-        # hero/board prefix, and may miss hero cards entirely (gold border
-        # in PPPoker).  Use the card reader whenever hero cards are still
-        # missing — regardless of whether buttons were detected.
+        # ── Card reader fallback ───────────────────────────────────
+        # The YOLO model may miss hero cards (gold border) and board
+        # cards.  Use the template-matching card reader (preferred) or
+        # the OCR-based reader as fallback.
         has_hero = bool(snapshot.hero_cards)
 
         _t0 = time.perf_counter()
         has_board = bool(snapshot.board_cards)
-        if (not has_hero or not has_board) and self._card_reader.enabled:
+        if not has_hero or not has_board:
             # Build action_points with config-based button positions so
             # the card reader can estimate hero/board regions even when
             # YOLO did not detect buttons.
@@ -867,9 +870,27 @@ class VisionTool:
                 reader_action_points = self._config_action_points()
 
             pot_xy = snapshot.action_points.get("pot_indicator")
-            hero_cards, board_cards = self._card_reader.read_cards(
-                frame, reader_action_points, pot_xy,
-            )
+
+            hero_cards: list[str] = []
+            board_cards: list[str] = []
+
+            # Primary: OCR-based reader (works across emulators, auto-
+            # learns templates for future template-matching acceleration)
+            if self._card_reader.enabled:
+                hero_cards, board_cards = self._card_reader.read_cards(
+                    frame, reader_action_points, pot_xy,
+                )
+
+            # Fallback: template-matching reader if OCR found nothing
+            if (not hero_cards or not board_cards) and self._template_reader.enabled:
+                tmpl_hero, tmpl_board = self._template_reader.read_cards(
+                    frame, reader_action_points, pot_xy,
+                )
+                if not hero_cards:
+                    hero_cards = tmpl_hero
+                if not board_cards:
+                    board_cards = tmpl_board
+
             # Merge: prefer card-reader results; keep YOLO detections
             # as fallback for any zone the reader didn't fill.
             merged_hero = hero_cards if hero_cards else list(snapshot.hero_cards)

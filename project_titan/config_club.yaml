@@ -65,13 +65,17 @@ ocr:
   use_easyocr: false
   tesseract_cmd: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
   # OCR regions em coordenadas Android nativas (720x1280).
-  # Re-calibradas em 2025-07-17 via diag_broad_scan.py no MuMu 12.
-  #   pot    → valor do pot acima do board (y≈385-440).
-  #   stack  → stack do herói abaixo das cartas (y≈1080-1140, x≈280-425).
-  #   call   → valor no botão de call/raise (y≈1210-1245, x≈475-630).
-  pot_region: 240,385,260,55
-  stack_region: 270,1080,155,60
-  call_region: 470,1210,155,35
+  # Re-calibradas em 2025-06-24 via debug_ocr_(scan|colours|stack2) no MuMu 12.
+  #
+  # POT  → texto dourado/amarelo acima do board (H≈16, S≈150-215, V≈100-170).
+  #         Texto CLARO em fundo ESCURO (semi-transparente).
+  # STACK→ texto ESCURO em fundo BRANCO no painel do herói (y≈1027-1061).
+  #         Dígitos escuros; 6 contornos a espaçamento ~28px.
+  # CALL → texto branco no botão Call; botão centrado em ~(361,1220).
+  #
+  pot_region: 310,130,130,70
+  stack_region: 410,1022,175,40
+  call_region: 300,1210,125,30
   pot_min: 0.0
   pot_max: 500000.0
   stack_min: 0.0
